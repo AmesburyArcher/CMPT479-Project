@@ -109,6 +109,22 @@ namespace audio
         unsigned int factor;
     };
 
+    class NormalizePabloKernel final : public PabloKernel {
+        public:
+            NormalizePabloKernel(
+                LLVMTypeSystemInterface & b,
+                const unsigned int bitsPerSample,
+                StreamSet * const inputStreams,
+                StreamSet * const outputStreams
+            )
+        protected:
+            void generatePabloMethod() override;
+
+        private:
+            unsigned int bitsPerSample;
+            unsigned int numInputStreams;
+    }
+
     class ConcatenateKernel final : public PabloKernel {
     public:
         ConcatenateKernel(LLVMTypeSystemInterface & b,

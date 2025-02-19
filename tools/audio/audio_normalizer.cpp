@@ -61,23 +61,23 @@ PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &
 
     ParseAudioBuffer(P, fileDescriptor, numChannels, bitsPerSample, ChannelSampleStreams);
     
-    std::vector<StreamSet *> AmplifiedSampleStreams(numChannels);
+    std::vector<StreamSet *> NormalizedSampleStreams(numChannels);
 
     for (unsigned i = 0; i < numChannels; ++i)
     {
         StreamSet* BasisBits = P.CreateStreamSet(bitsPerSample);
         S2P(P, bitsPerSample, ChannelSampleStreams[i], BasisBits);
         //SHOW_BIXNUM(BasisBits);
-        StreamSet *AmplifiedBasisBits = P.CreateStreamSet(bitsPerSample);
-        P.CreateKernelCall<AmplifyPabloKernel>(bitsPerSample, BasisBits, amplifyFactor, AmplifiedBasisBits);
-        //SHOW_STREAM(AmplifiedBasisBits);
+        StreamSet *NormalizedBasisBits = P.CreateStreamSet(bitsPerSample);
+        P.CreateKernelCall<NormalizePabloKernel>(bitsPerSample, BasisBits, NormalizedBasisBits);
+        //SHOW_STREAM(NormalizedBasisBits);
 
-        AmplifiedSampleStreams[i] = P.CreateStreamSet(1, bitsPerSample);
-        P2S(P, AmplifiedBasisBits, AmplifiedSampleStreams[i]);
+        NormalizedSampleStreams[i] = P.CreateStreamSet(1, bitsPerSample);
+        P2S(P, NormalizedBasisBits, NormalizedSampleStreams[i]);
         //SHOW_BYTES(OutputStreams[i]);
     }
     
-    P.CreateKernelCall<MergeKernel>(bitsPerSample, AmplifiedSampleStreams[0], AmplifiedSampleStreams[1], OutputBytes);
+    P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], NormalizedSampleStreams[1], OutputBytes);
     SHOW_BYTES(OutputBytes);
     return P.compile();
 }
