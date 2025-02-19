@@ -269,10 +269,10 @@ namespace audio
 
     FlexS2PKernel::FlexS2PKernel(LLVMTypeSystemInterface &b, const unsigned int bitsPerSample, StreamSet *const inputStream, StreamSet *const outputStreams)
         :
+         bitsPerSample(bitsPerSample),
          MultiBlockKernel(b, "FlexS2PKernel_" + std::to_string(bitsPerSample),
                            {Binding{"inputStream", inputStream, FixedRate(1)}},
-                           {Binding{"outputStreams", outputStreams, FixedRate(1)}}, {}, {}, {}),
-         bitsPerSample(bitsPerSample)
+                           {Binding{"outputStreams", outputStreams, FixedRate(1)}}, {}, {}, {})
     {
         if (bitsPerSample != 4 && bitsPerSample % 8 != 0)
         {
@@ -287,6 +287,7 @@ namespace audio
     void FlexS2PKernel::generateMultiBlockLogic(KernelBuilder &b, Value *const numOfStrides)
     {
         const unsigned inputPacksPerStride = bitsPerSample;
+        const unsigned outputPacksPerStride = 1;
         const unsigned packSize = b.getBitBlockWidth();
         const unsigned numElementsPerPack = packSize / bitsPerSample;
 
@@ -296,6 +297,7 @@ namespace audio
         Constant *const ZERO = b.getSize(0);
 
         Type *vecType = FixedVectorType::get(b.getIntNTy(bitsPerSample), static_cast<unsigned>(numElementsPerPack));
+        Type *vec1Type = FixedVectorType::get(b.getIntNTy(1), static_cast<unsigned>(numElementsPerPack));
 
         Value *numOfBlocks = numOfStrides;
         b.CreateBr(loop);
@@ -366,6 +368,21 @@ namespace audio
 
         Var *result = getOutputStreamVar("markStream");
         pb.createAssign(pb.createExtract(result, pb.getInteger(0)), exceedThreshold);
+    }
+
+    NormalizePabloKernel::NormalizePabloKernel(LLVMTypeSystemInterface &b, const unsigned int bitsPerSample, StreamSet *const inputStreams, StreamSet *const outputStreams) : PabloKernel(b, "NormalizePabloKernel_" + std::to_string(inputStreams->getNumElements()) + "_" + std::to_string(bitsPerSample),
+                      {Binding{"inputStreams", inputStreams}},
+                      {Binding{"outputStreams", outputStreams}}),
+          bitsPerSample(bitsPerSample), numInputStreams(inputStreams->getNumElements()), 
+    {
+        if (inputStreams->getNumElements() != outputStreams->getNumElements())
+        {
+            throw std::invalid_argument("numInputStreams: " + std::to_string(inputStreams->getNumElements()) + " != numOutputStreams: " + std::to_string(outputStreams->getNumElements()));
+        }
+    }
+
+    void NormalizePabloKernel::generatePabloMethod() {
+        
     }
 
     AmplifyPabloKernel::AmplifyPabloKernel(LLVMTypeSystemInterface &b, const unsigned int bitsPerSample, StreamSet *const inputStreams, const unsigned int &factor, StreamSet *const outputStreams)
