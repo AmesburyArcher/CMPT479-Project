@@ -382,6 +382,11 @@ namespace audio
     }
 
     void NormalizePabloKernel::generatePabloMethod() {
+        pablo::PabloBuilder pb(getEntryScope());
+        BixNumCompiler bnc(pb);
+        std::vector<PabloAST *> inputStreams = getInputStreamSet("inputStreams");
+        const unsigned bitsPerSample = inputStreams.size();
+
         
     }
 
