@@ -108,11 +108,11 @@ PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &
         // P.CreateKernelCall<PeakDetectionKernel>(bitsPerSample, BasisBits, peakAmplitude);
 
         // Scalar *gainFactor = P.CreateScalar("GainFactor", bitsPerSample);
-        Scalar *gainFactor = P.CreateScalar(P.getInt64Ty());
+        // Scalar *gainFactor = P.CreateScalar(P.getInt64Ty());
         // P.CreateKernelCall<ComputeGainKernel>(peakAmplitude, gainFactor); // this needs further edge case testing
 
         StreamSet *NormalizedBasisBits = P.CreateStreamSet(bitsPerSample);
-        P.CreateKernelCall<NormalizePabloKernel>(bitsPerSample, BasisBits, gainFactor, NormalizedBasisBits);
+        P.CreateKernelCall<NormalizePabloKernel>(bitsPerSample, BasisBits, nullptr, NormalizedBasisBits);
         //SHOW_STREAM(NormalizedBasisBits);
 
         NormalizedSampleStreams[i] = P.CreateStreamSet(1, bitsPerSample);
