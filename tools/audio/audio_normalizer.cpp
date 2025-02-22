@@ -44,36 +44,38 @@ static cl::opt<std::string> outputFile("o", cl::desc("Specify a file to save the
 
 typedef void (*PipelineFunctionType)(StreamSetPtr & ss_buf, int32_t fd);
 
-class NormalizePabloKernel final : public PabloKernel {
-    public:
-        NormalizePabloKernel(LLVMTypeSystemInterface & b, const unsigned int bitsPerSample,
-                             StreamSet * const inputStreams, Scalar * const gainFactor, 
-                             StreamSet * const outputStreams)
+// This was moved to audio.cpp
 
-            : PabloKernel(b, "NormalizePabloKernel",
-                          {Binding{"input", inputStreams}, Binding{"gain", gainFactor}}, {Binding{"output", outputStreams}})
-            , mBitsPerSample(bitsPerSample) {}
-    
-    protected:
-        void generatePabloMethod() override {
-            PabloBuilder pb(getEntryScope());
-    
-            Var *input = getInput(0);
-
-            Var *gain = getInput(1);  
-            Var *normalized = pb.createMul(input, gain); // this might need more adjustments
-    
-           
-            unsigned int maxAmplitude = (1 << (mBitsPerSample - 1)) - 1; // not sure about this part using pcm
-            Var *clamped = pb.createMin(normalized, pb.createConstant(maxAmplitude));
-
-            Var *output = getOutput(0);
-            pb.createAssign(output, clamped);
-        }
-    
-    private:
-        unsigned int mBitsPerSample;
-    };
+// class NormalizePabloKernel final : public PabloKernel {
+//     public:
+//         NormalizePabloKernel(LLVMTypeSystemInterface & b, const unsigned int bitsPerSample,
+//                              StreamSet * const inputStreams, Scalar * const gainFactor,
+//                              StreamSet * const outputStreams)
+//
+//             : PabloKernel(b, "NormalizePabloKernel",
+//                           {Binding{"input", inputStreams}, Binding{"gain", gainFactor}}, {Binding{"output", outputStreams}})
+//             , mBitsPerSample(bitsPerSample) {}
+//
+//     protected:
+//         void generatePabloMethod() override {
+//             PabloBuilder pb(getEntryScope());
+//
+//             Var *input = getInput(0);
+//
+//             Var *gain = getInput(1);
+//             Var *normalized = pb.createMul(input, gain); // this might need more adjustments
+//
+//
+//             unsigned int maxAmplitude = (1 << (mBitsPerSample - 1)) - 1; // not sure about this part using pcm
+//             Var *clamped = pb.createMin(normalized, pb.createConstant(maxAmplitude));
+//
+//             Var *output = getOutput(0);
+//             pb.createAssign(output, clamped);
+//         }
+//
+//     private:
+//         unsigned int mBitsPerSample;
+//     };
 
 PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &numChannels, const unsigned int &bitsPerSample)
 {
@@ -98,13 +100,16 @@ PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &
     {
         StreamSet* BasisBits = P.CreateStreamSet(bitsPerSample);
         S2P(P, bitsPerSample, ChannelSampleStreams[i], BasisBits);
-        //SHOW_BIXNUM(BasisBits);
+        SHOW_BIXNUM(BasisBits);
 
-        Scalar *peakAmplitude = P.CreateScalar("PeakAmplitude", bitsPerSample); // need peak detection for proper normalizing
-        P.CreateKernelCall<PeakDetectionKernel>(bitsPerSample, BasisBits, peakAmplitude);
+        // Create scalars don't appear to work the way you're calling them here
 
-        Scalar *gainFactor = P.CreateScalar("GainFactor", bitsPerSample);
-        P.CreateKernelCall<ComputeGainKernel>(peakAmplitude, gainFactor); // this needs further edge case testing
+        // Scalar *peakAmplitude = P.CreateScalar("PeakAmplitude", bitsPerSample); // need peak detection for proper normalizing
+        // P.CreateKernelCall<PeakDetectionKernel>(bitsPerSample, BasisBits, peakAmplitude);
+
+        // Scalar *gainFactor = P.CreateScalar("GainFactor", bitsPerSample);
+        Scalar *gainFactor = P.CreateScalar(P.getInt64Ty());
+        // P.CreateKernelCall<ComputeGainKernel>(peakAmplitude, gainFactor); // this needs further edge case testing
 
         StreamSet *NormalizedBasisBits = P.CreateStreamSet(bitsPerSample);
         P.CreateKernelCall<NormalizePabloKernel>(bitsPerSample, BasisBits, gainFactor, NormalizedBasisBits);
@@ -115,11 +120,13 @@ PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &
         //SHOW_BYTES(OutputStreams[i]);
     }
     //so that it works with mono too --------------- still needs thorough testing
-    if (numChannels== 1) {
-        P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], OutputBytes);
-    } else {
-        P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], NormalizedSampleStreams[1], OutputBytes);
-    }
+    // Current merge kernel needs 5 arguments so have to change that before we handle only 1 channel
+    // if (numChannels== 1) {
+    //     P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], OutputBytes);
+    // } else {
+    //     P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], NormalizedSampleStreams[1], OutputBytes);
+    // }
+    P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], NormalizedSampleStreams[1], OutputBytes);
 
     SHOW_BYTES(OutputBytes);
     return P.compile();

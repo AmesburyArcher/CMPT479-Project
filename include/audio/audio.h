@@ -115,15 +115,16 @@ namespace audio
                 LLVMTypeSystemInterface & b,
                 const unsigned int bitsPerSample,
                 StreamSet * const inputStreams,
+                Scalar * const gainFactor,
                 StreamSet * const outputStreams
-            )
+            );
         protected:
             void generatePabloMethod() override;
 
         private:
             unsigned int bitsPerSample;
             unsigned int numInputStreams;
-    }
+    };
 
     class ConcatenateKernel final : public PabloKernel {
     public:

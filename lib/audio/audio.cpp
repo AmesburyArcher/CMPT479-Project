@@ -370,14 +370,19 @@ namespace audio
         pb.createAssign(pb.createExtract(result, pb.getInteger(0)), exceedThreshold);
     }
 
-    NormalizePabloKernel::NormalizePabloKernel(LLVMTypeSystemInterface &b, const unsigned int bitsPerSample, StreamSet *const inputStreams, StreamSet *const outputStreams) : PabloKernel(b, "NormalizePabloKernel_" + std::to_string(inputStreams->getNumElements()) + "_" + std::to_string(bitsPerSample),
-                      {Binding{"inputStreams", inputStreams}},
-                      {Binding{"outputStreams", outputStreams}}),
-          bitsPerSample(bitsPerSample), numInputStreams(inputStreams->getNumElements()), 
+    NormalizePabloKernel::NormalizePabloKernel(LLVMTypeSystemInterface & b, const unsigned int bitsPerSample,
+                             StreamSet * const inputStreams, Scalar * const gainFactor,
+                             StreamSet * const outputStreams)
+
+        : PabloKernel(b, "NormalizePabloKernel",
+                      {Binding{"input", inputStreams}, Binding{"gain", gainFactor}}, {Binding{"output", outputStreams}})
+          , bitsPerSample(bitsPerSample), numInputStreams(inputStreams->getNumElements())
     {
         if (inputStreams->getNumElements() != outputStreams->getNumElements())
         {
-            throw std::invalid_argument("numInputStreams: " + std::to_string(inputStreams->getNumElements()) + " != numOutputStreams: " + std::to_string(outputStreams->getNumElements()));
+            throw std::invalid_argument(
+                "numInputStreams: " + std::to_string(inputStreams->getNumElements()) + " != numOutputStreams: " +
+                std::to_string(outputStreams->getNumElements()));
         }
     }
 
@@ -385,7 +390,19 @@ namespace audio
         pablo::PabloBuilder pb(getEntryScope());
         BixNumCompiler bnc(pb);
         std::vector<PabloAST *> inputStreams = getInputStreamSet("inputStreams");
-        const unsigned bitsPerSample = inputStreams.size();
+        // const unsigned bitsPerSample = inputStreams.size();
+
+        Var *input = getInput(0);
+
+        Var *gain = getInput(1);
+        // Var *normalized = pb.createMul(input, gain); // this might need more adjustments
+
+
+        unsigned int maxAmplitude = (1 << (bitsPerSample - 1)) - 1; // not sure about this part using pcm
+        // Var *clamped = pb.createMin(normalized, pb.createConstant(maxAmplitude));
+
+        Var *output = getOutput(0);
+        // pb.createAssign(output, clamped);
 
         
     }

@@ -41,3 +41,17 @@ DEPS
     toolchain
     audio
 )
+
+parabix_add_executable(
+        NAME
+            audio_normalizer
+        SRC
+            audio_normalizer.cpp
+        DEPS
+            kernel.io
+            kernel.pipeline
+            kernel.util
+            toolchain
+            audio
+)
+
