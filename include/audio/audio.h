@@ -115,7 +115,6 @@ namespace audio
                 LLVMTypeSystemInterface & b,
                 const unsigned int bitsPerSample,
                 StreamSet * const inputStreams,
-                Scalar * const gainFactor,
                 StreamSet * const outputStreams
             );
         protected:

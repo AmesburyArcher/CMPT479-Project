@@ -77,55 +77,98 @@ typedef void (*PipelineFunctionType)(StreamSetPtr & ss_buf, int32_t fd);
 //         unsigned int mBitsPerSample;
 //     };
 
-PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &numChannels, const unsigned int &bitsPerSample)
-{
+// PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &numChannels, const unsigned int &bitsPerSample)
+// {
+//
+//     auto P = CreatePipeline(pxDriver, Output<streamset_t>("OutputBytes", 1, bitsPerSample * numChannels, ReturnedBuffer(1)), Input<int32_t>("inputFileDecriptor"));
+//
+//     StreamSet * OutputBytes = P.getOutputStreamSet("OutputBytes");
+//
+//     Scalar * const fileDescriptor = P.getInputScalar("inputFileDecriptor");
+//
+//     std::vector<StreamSet *> ChannelSampleStreams(numChannels);
+//     for (unsigned i=0;i<numChannels;++i)
+//     {
+//         ChannelSampleStreams[i] = P.CreateStreamSet(1,bitsPerSample);
+//     }
+//
+//     ParseAudioBuffer(P, fileDescriptor, numChannels, bitsPerSample, ChannelSampleStreams);
+//
+//     std::vector<StreamSet *> NormalizedSampleStreams(numChannels);
+//
+//     for (unsigned i = 0; i < numChannels; ++i)
+//     {
+//         StreamSet* BasisBits = P.CreateStreamSet(bitsPerSample);
+//         S2P(P, bitsPerSample, ChannelSampleStreams[i], BasisBits);
+//         SHOW_BIXNUM(BasisBits);
+//
+//         // Create scalars don't appear to work the way you're calling them here
+//
+//         // Scalar *peakAmplitude = P.CreateScalar("PeakAmplitude", bitsPerSample); // need peak detection for proper normalizing
+//         // P.CreateKernelCall<PeakDetectionKernel>(bitsPerSample, BasisBits, peakAmplitude);
+//
+//         // Scalar *gainFactor = P.CreateScalar("GainFactor", bitsPerSample);
+//         // Scalar *gainFactor = P.CreateScalar(P.getInt64Ty());
+//         // P.CreateKernelCall<ComputeGainKernel>(peakAmplitude, gainFactor); // this needs further edge case testing
+//
+//         StreamSet *NormalizedBasisBits = P.CreateStreamSet(bitsPerSample);
+//         P.CreateKernelCall<NormalizePabloKernel>(bitsPerSample, BasisBits, nullptr, NormalizedBasisBits);
+//         //SHOW_STREAM(NormalizedBasisBits);
+//
+//         NormalizedSampleStreams[i] = P.CreateStreamSet(1, bitsPerSample);
+//         P2S(P, NormalizedBasisBits, NormalizedSampleStreams[i]);
+//         //SHOW_BYTES(OutputStreams[i]);
+//     }
+//     //so that it works with mono too --------------- still needs thorough testing
+//     // Current merge kernel needs 5 arguments so have to change that before we handle only 1 channel
+//     // if (numChannels== 1) {
+//     //     P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], OutputBytes);
+//     // } else {
+//     //     P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], NormalizedSampleStreams[1], OutputBytes);
+//     // }
+//     P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], NormalizedSampleStreams[1], OutputBytes);
+//
+//     SHOW_BYTES(OutputBytes);
+//     return P.compile();
+// }
 
-    auto P = CreatePipeline(pxDriver, Output<streamset_t>("OutputBytes", 1, bitsPerSample * numChannels, ReturnedBuffer(1)), Input<int32_t>("inputFileDecriptor"));
+PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &numChannels, const unsigned int &bitsPerSample) {
+    auto P = CreatePipeline(pxDriver,
+        Output<streamset_t>("OutputBytes", 1, bitsPerSample * numChannels, ReturnedBuffer(1)),
+        Input<int32_t>("inputFileDecriptor"));
 
     StreamSet * OutputBytes = P.getOutputStreamSet("OutputBytes");
-
     Scalar * const fileDescriptor = P.getInputScalar("inputFileDecriptor");
 
+    // Create streams for each channel
     std::vector<StreamSet *> ChannelSampleStreams(numChannels);
-    for (unsigned i=0;i<numChannels;++i)
-    {
-        ChannelSampleStreams[i] = P.CreateStreamSet(1,bitsPerSample);
+    for (unsigned i = 0; i < numChannels; ++i) {
+        ChannelSampleStreams[i] = P.CreateStreamSet(1, bitsPerSample);
     }
 
-    ParseAudioBuffer(P, fileDescriptor, numChannels, bitsPerSample, ChannelSampleStreams);
-    
+    // Parse audio buffer into channels
+    ParseAudioBuffer(P, fileDescriptor, numChannels, bitsPerSample, ChannelSampleStreams, true);
+
     std::vector<StreamSet *> NormalizedSampleStreams(numChannels);
 
-    for (unsigned i = 0; i < numChannels; ++i)
-    {
+    // Process each channel
+    for (unsigned i = 0; i < numChannels; ++i) {
+        // Convert serial to parallel
         StreamSet* BasisBits = P.CreateStreamSet(bitsPerSample);
         S2P(P, bitsPerSample, ChannelSampleStreams[i], BasisBits);
         SHOW_BIXNUM(BasisBits);
 
-        // Create scalars don't appear to work the way you're calling them here
-
-        // Scalar *peakAmplitude = P.CreateScalar("PeakAmplitude", bitsPerSample); // need peak detection for proper normalizing
-        // P.CreateKernelCall<PeakDetectionKernel>(bitsPerSample, BasisBits, peakAmplitude);
-
-        // Scalar *gainFactor = P.CreateScalar("GainFactor", bitsPerSample);
-        // Scalar *gainFactor = P.CreateScalar(P.getInt64Ty());
-        // P.CreateKernelCall<ComputeGainKernel>(peakAmplitude, gainFactor); // this needs further edge case testing
-
+        // Normalize the audio using normalization kernel
         StreamSet *NormalizedBasisBits = P.CreateStreamSet(bitsPerSample);
-        P.CreateKernelCall<NormalizePabloKernel>(bitsPerSample, BasisBits, nullptr, NormalizedBasisBits);
-        //SHOW_STREAM(NormalizedBasisBits);
+        P.CreateKernelCall<NormalizePabloKernel>(bitsPerSample, BasisBits, NormalizedBasisBits);
+        SHOW_BIXNUM(NormalizedBasisBits);
 
+        // Convert back to serial
         NormalizedSampleStreams[i] = P.CreateStreamSet(1, bitsPerSample);
         P2S(P, NormalizedBasisBits, NormalizedSampleStreams[i]);
-        //SHOW_BYTES(OutputStreams[i]);
+        SHOW_BYTES(NormalizedSampleStreams[i]);
     }
-    //so that it works with mono too --------------- still needs thorough testing
-    // Current merge kernel needs 5 arguments so have to change that before we handle only 1 channel
-    // if (numChannels== 1) {
-    //     P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], OutputBytes);
-    // } else {
-    //     P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], NormalizedSampleStreams[1], OutputBytes);
-    // }
+
     P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], NormalizedSampleStreams[1], OutputBytes);
 
     SHOW_BYTES(OutputBytes);

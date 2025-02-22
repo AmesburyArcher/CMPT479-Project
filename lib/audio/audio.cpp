@@ -144,83 +144,171 @@ namespace audio
     }
 
     void readWAVHeader(const int &fd,
-                       unsigned int &numChannels,
-                       unsigned int &sampleRate,
-                       unsigned int &bitsPerSample,
-                       unsigned int &numSamples)
+                   unsigned int &numChannels,
+                   unsigned int &sampleRate,
+                   unsigned int &bitsPerSample,
+                   unsigned int &numSamples)
     {
-        char temp_buffer[11];
+        // Buffer for reading chunks
+        char chunk_id[4];
+        uint32_t chunk_size;
 
-        // validate file format
-        ssize_t bytesRead = read(fd, &temp_buffer, 8);
-        temp_buffer[4] = '\0';
-        if (bytesRead <= 0 || std::string(temp_buffer) != "RIFF")
-        {
-            throw std::runtime_error("Error parsing file format: Chunk ID does not match Wav format.");
+        // Read RIFF header
+        if (read(fd, chunk_id, 4) != 4 || strncmp(chunk_id, "RIFF", 4) != 0) {
+            throw std::runtime_error("Error: Not a valid RIFF file");
         }
 
-        bytesRead = read(fd, &temp_buffer, 4);
-        temp_buffer[4] = '\0';
-        if (bytesRead <= 0 || std::string(temp_buffer) != "WAVE")
-        {
-            throw std::runtime_error("Error parsing file format: Header does not match Wav format.");
+        // Read file size
+        if (read(fd, &chunk_size, 4) != 4) {
+            throw std::runtime_error("Error: Cannot read file size");
         }
 
-        bytesRead = read(fd, &temp_buffer, 10);
-        temp_buffer[4] = '\0';
-        if (bytesRead <= 0 || std::string(temp_buffer) != "fmt\x20")
-        {
-            throw std::runtime_error("Error parsing file format: Subchunk ID does not match Wav format.");
+        // Read WAVE identifier
+        if (read(fd, chunk_id, 4) != 4 || strncmp(chunk_id, "WAVE", 4) != 0) {
+            throw std::runtime_error("Error: Not a valid WAVE file");
         }
 
-        // read 2 bytes for num channels
-        uint16_t num_channels;
-        bytesRead = read(fd, reinterpret_cast<char *>(&num_channels), 2);
-        if (bytesRead <= 0)
-        {
-            throw std::runtime_error("Error parsing file format: Cannot interpret number channels.");
-        }
-        numChannels = num_channels;
+        // Find fmt chunk
+        bool found_fmt = false;
+        while (read(fd, chunk_id, 4) == 4) {
+            if (read(fd, &chunk_size, 4) != 4) {
+                throw std::runtime_error("Error: Cannot read chunk size");
+            }
 
-        // read 4 bytes for sample rate
-        bytesRead = read(fd, reinterpret_cast<char *>(&sampleRate), 4);
-        if (bytesRead <= 0)
-        {
-            throw std::runtime_error("Error parsing file format: Cannot interpret sample rate.");
+            if (strncmp(chunk_id, "fmt ", 4) == 0) {
+                // Read format chunk
+                uint16_t audio_format;
+                if (read(fd, &audio_format, 2) != 2) {
+                    throw std::runtime_error("Error: Cannot read audio format");
+                }
+                if (audio_format != 1) { // PCM = 1
+                    throw std::runtime_error("Error: Only PCM format is supported");
+                }
+
+                uint16_t num_channels;
+                if (read(fd, &num_channels, 2) != 2) {
+                    throw std::runtime_error("Error: Cannot read number of channels");
+                }
+                numChannels = num_channels;
+
+                uint32_t sample_rate;
+                if (read(fd, &sample_rate, 4) != 4) {
+                    throw std::runtime_error("Error: Cannot read sample rate");
+                }
+                sampleRate = sample_rate;
+
+                // Skip byte rate (4 bytes) and block align (2 bytes)
+                uint32_t byte_rate;
+                uint16_t block_align;
+                if (read(fd, &byte_rate, 4) != 4 || read(fd, &block_align, 2) != 2) {
+                    throw std::runtime_error("Error: Cannot read byte rate and block align");
+                }
+
+                uint16_t bits_per_sample;
+                if (read(fd, &bits_per_sample, 2) != 2) {
+                    throw std::runtime_error("Error: Cannot read bits per sample");
+                }
+                bitsPerSample = bits_per_sample;
+
+                // Skip any extra format bytes
+                if (chunk_size > 16) {
+                    lseek(fd, chunk_size - 16, SEEK_CUR);
+                }
+
+                found_fmt = true;
+            } else if (strncmp(chunk_id, "data", 4) == 0) {
+                // Calculate number of samples
+                numSamples = chunk_size / (numChannels * (bitsPerSample / 8));
+                break;
+            } else {
+                // Skip unknown chunk
+                lseek(fd, chunk_size, SEEK_CUR);
+            }
         }
 
-        // skip the next 6 bytes
-        bytesRead = read(fd, temp_buffer, 6);
-        if (bytesRead <= 0)
-        {
-            throw std::runtime_error("Error parsing file format.");
+        if (!found_fmt) {
+            throw std::runtime_error("Error: Could not find format chunk");
         }
-
-        // read 4 bytes for num bits per sample
-        uint16_t bits_per_sample;
-        bytesRead = read(fd, reinterpret_cast<char *>(&bits_per_sample), 2);
-        if (bytesRead <= 0)
-        {
-            throw std::runtime_error("Error parsing file format.");
-        }
-        bitsPerSample = bits_per_sample;
-
-        bytesRead = read(fd, temp_buffer, 4);
-        temp_buffer[4] = '\0';
-        if (bytesRead <= 0 || std::string(temp_buffer) != "data")
-        {
-            throw std::runtime_error("Error parsing file format: Subchunk 2 ID does not match Wav format.");
-        }
-
-        unsigned subchunk2_size;
-        bytesRead = read(fd, reinterpret_cast<char *>(&subchunk2_size), 4);
-        if (bytesRead <= 0)
-        {
-            throw std::runtime_error("Error parsing file format: Cannot interpret subchunk 2 size.");
-        }
-
-        numSamples = subchunk2_size / (numChannels * bitsPerSample / 8);
     }
+
+    // void readWAVHeader(const int &fd,
+    //                    unsigned int &numChannels,
+    //                    unsigned int &sampleRate,
+    //                    unsigned int &bitsPerSample,
+    //                    unsigned int &numSamples)
+    // {
+    //     char temp_buffer[11];
+    //
+    //     // validate file format
+    //     ssize_t bytesRead = read(fd, &temp_buffer, 8);
+    //     temp_buffer[4] = '\0';
+    //     if (bytesRead <= 0 || std::string(temp_buffer) != "RIFF")
+    //     {
+    //         throw std::runtime_error("Error parsing file format: Chunk ID does not match Wav format.");
+    //     }
+    //
+    //     bytesRead = read(fd, &temp_buffer, 4);
+    //     temp_buffer[4] = '\0';
+    //     if (bytesRead <= 0 || std::string(temp_buffer) != "WAVE")
+    //     {
+    //         throw std::runtime_error("Error parsing file format: Header does not match Wav format.");
+    //     }
+    //
+    //     bytesRead = read(fd, &temp_buffer, 10);
+    //     temp_buffer[4] = '\0';
+    //     if (bytesRead <= 0 || std::string(temp_buffer) != "fmt\x20")
+    //     {
+    //         throw std::runtime_error("Error parsing file format: Subchunk ID does not match Wav format.");
+    //     }
+    //
+    //     // read 2 bytes for num channels
+    //     uint16_t num_channels;
+    //     bytesRead = read(fd, reinterpret_cast<char *>(&num_channels), 2);
+    //     if (bytesRead <= 0)
+    //     {
+    //         throw std::runtime_error("Error parsing file format: Cannot interpret number channels.");
+    //     }
+    //     numChannels = num_channels;
+    //
+    //     // read 4 bytes for sample rate
+    //     bytesRead = read(fd, reinterpret_cast<char *>(&sampleRate), 4);
+    //     if (bytesRead <= 0)
+    //     {
+    //         throw std::runtime_error("Error parsing file format: Cannot interpret sample rate.");
+    //     }
+    //
+    //     // skip the next 6 bytes
+    //     bytesRead = read(fd, temp_buffer, 6);
+    //     if (bytesRead <= 0)
+    //     {
+    //         throw std::runtime_error("Error parsing file format.");
+    //     }
+    //
+    //     // read 4 bytes for num bits per sample
+    //     uint16_t bits_per_sample;
+    //     bytesRead = read(fd, reinterpret_cast<char *>(&bits_per_sample), 2);
+    //     if (bytesRead <= 0)
+    //     {
+    //         throw std::runtime_error("Error parsing file format.");
+    //     }
+    //     bitsPerSample = bits_per_sample;
+    //
+    //     bytesRead = read(fd, temp_buffer, 4);
+    //     temp_buffer[4] = '\0';
+    //     if (bytesRead <= 0 || std::string(temp_buffer) != "data")
+    //     {
+    //         throw std::runtime_error("Error parsing file format: Subchunk 2 ID does not match Wav format.");
+    //     }
+    //
+    //     unsigned subchunk2_size;
+    //     bytesRead = read(fd, reinterpret_cast<char *>(&subchunk2_size), 4);
+    //     if (bytesRead <= 0)
+    //     {
+    //         throw std::runtime_error("Error parsing file format: Cannot interpret subchunk 2 size.");
+    //     }
+    //
+    //     numSamples = subchunk2_size / (numChannels * bitsPerSample / 8);
+    // }
 
     void S2P(
         ProgramBuilder &P,
@@ -371,18 +459,17 @@ namespace audio
     }
 
     NormalizePabloKernel::NormalizePabloKernel(LLVMTypeSystemInterface & b, const unsigned int bitsPerSample,
-                             StreamSet * const inputStreams, Scalar * const gainFactor,
-                             StreamSet * const outputStreams)
-
+                         StreamSet * const inputStreams, StreamSet * const outputStreams)
         : PabloKernel(b, "NormalizePabloKernel",
-                      {Binding{"input", inputStreams}, Binding{"gain", gainFactor}}, {Binding{"output", outputStreams}})
-          , bitsPerSample(bitsPerSample), numInputStreams(inputStreams->getNumElements())
+                      {Binding{"inputStreams", inputStreams}},
+                      {Binding{"outputStreams", outputStreams}})
+        , bitsPerSample(bitsPerSample)
+        , numInputStreams(inputStreams->getNumElements())
     {
-        if (inputStreams->getNumElements() != outputStreams->getNumElements())
-        {
+        if (inputStreams->getNumElements() != outputStreams->getNumElements()) {
             throw std::invalid_argument(
-                "numInputStreams: " + std::to_string(inputStreams->getNumElements()) + " != numOutputStreams: " +
-                std::to_string(outputStreams->getNumElements()));
+                "numInputStreams: " + std::to_string(inputStreams->getNumElements()) +
+                " != numOutputStreams: " + std::to_string(outputStreams->getNumElements()));
         }
     }
 
@@ -390,21 +477,53 @@ namespace audio
         pablo::PabloBuilder pb(getEntryScope());
         BixNumCompiler bnc(pb);
         std::vector<PabloAST *> inputStreams = getInputStreamSet("inputStreams");
-        // const unsigned bitsPerSample = inputStreams.size();
 
-        Var *input = getInput(0);
+        // For testing, using a hardcoded amplification factor of 2
+        const unsigned amplificationFactor = 2;
 
-        Var *gain = getInput(1);
-        // Var *normalized = pb.createMul(input, gain); // this might need more adjustments
+        // Extend the bit width to accommodate multiplication
+        std::vector<PabloAST *> extendedStreams = bnc.SignExtend(inputStreams, bitsPerSample + 1);
 
+        // Multiply by hardcoded factor
+        std::vector<PabloAST *> amplifiedStreams = bnc.MulModular(extendedStreams, amplificationFactor);
 
-        unsigned int maxAmplitude = (1 << (bitsPerSample - 1)) - 1; // not sure about this part using pcm
-        // Var *clamped = pb.createMin(normalized, pb.createConstant(maxAmplitude));
+        // Handle negative numbers
+        std::vector<PabloAST *> flipStreams(amplifiedStreams.size());
+        for (unsigned i = 0; i < amplifiedStreams.size(); ++i) {
+            flipStreams[i] = pb.createNot(amplifiedStreams[i]);
+        }
 
-        Var *output = getOutput(0);
-        // pb.createAssign(output, clamped);
+        // Convert back to two's complement
+        std::vector<PabloAST *> negativeStreams = bnc.AddModular(flipStreams, 1);
 
-        
+        // Select between positive and negative based on sign bit
+        std::vector<PabloAST *> normalizedStreams = bnc.Select(
+            inputStreams[bitsPerSample-1] /*sign bit*/,
+            negativeStreams,
+            amplifiedStreams
+        );
+
+        // Prevent overflow
+        PabloAST *overflow = pb.createZeroes();
+        for (int i = bitsPerSample - 1; i < (int)normalizedStreams.size() - 1; ++i) {
+            overflow = pb.createOr(overflow, normalizedStreams[i]);
+        }
+
+        // Handle positive and negative overflow separately
+        PabloAST *is_negative_overflow = pb.createAnd(inputStreams[bitsPerSample-1], overflow);
+        PabloAST *is_positive_overflow = pb.createAnd(pb.createNot(inputStreams[bitsPerSample-1]), overflow);
+
+        // Clamp values
+        std::vector<PabloAST *> outputStreams(bitsPerSample);
+        for (int i = 0; i < (int)bitsPerSample - 1; ++i) {
+            outputStreams[i] = pb.createSel(is_negative_overflow, pb.createZeroes(), normalizedStreams[i]);
+            outputStreams[i] = pb.createSel(is_positive_overflow, pb.createOnes(), outputStreams[i]);
+        }
+
+        // Preserve sign bit
+        outputStreams[bitsPerSample-1] = inputStreams[bitsPerSample-1];
+
+        writeOutputStreamSet("outputStreams", outputStreams);
     }
 
     AmplifyPabloKernel::AmplifyPabloKernel(LLVMTypeSystemInterface &b, const unsigned int bitsPerSample, StreamSet *const inputStreams, const unsigned int &factor, StreamSet *const outputStreams)
