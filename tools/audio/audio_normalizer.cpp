@@ -104,7 +104,7 @@ PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &
         P.CreateKernelCall<PeakDetectionKernel>(bitsPerSample, BasisBits, peakAmplitude);
 
         Scalar *gainFactor = P.CreateScalar("GainFactor", bitsPerSample);
-        P.CreateKernelCall<ComputeGainKernel>(peakAmplitude, gainFactor);
+        P.CreateKernelCall<ComputeGainKernel>(peakAmplitude, gainFactor); // this needs further edge case testing
 
         StreamSet *NormalizedBasisBits = P.CreateStreamSet(bitsPerSample);
         P.CreateKernelCall<NormalizePabloKernel>(bitsPerSample, BasisBits, gainFactor, NormalizedBasisBits);
@@ -114,8 +114,13 @@ PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &
         P2S(P, NormalizedBasisBits, NormalizedSampleStreams[i]);
         //SHOW_BYTES(OutputStreams[i]);
     }
-    //this is restricted to multiple channels rn, have to make a decision whether we want to work w mono too or not
-    P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], NormalizedSampleStreams[1], OutputBytes);
+    //so that it works with mono too --------------- still needs thorough testing
+    if (numChannels== 1) {
+        P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], OutputBytes);
+    } else {
+        P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], NormalizedSampleStreams[1], OutputBytes);
+    }
+
     SHOW_BYTES(OutputBytes);
     return P.compile();
 }
