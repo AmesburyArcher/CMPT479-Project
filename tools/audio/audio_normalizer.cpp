@@ -42,95 +42,132 @@ static cl::OptionCategory DemoOptions("Demo Options", "Demo control options.");
 static cl::opt<std::string> inputFile(cl::Positional, cl::desc("<input file>"), cl::Required, cl::cat(DemoOptions));
 static cl::opt<std::string> outputFile("o", cl::desc("Specify a file to save the modified .wav file."), cl::cat(DemoOptions));
 
+class PeakDetectionKernel final : public MultiBlockKernel {
+public:
+    PeakDetectionKernel(LLVMTypeSystemInterface & b,
+                         const unsigned int bitsPerSample,
+                         StreamSet * const inputStreams,
+                         Scalar * const peakAmplitude)
+    : MultiBlockKernel(b, "PeakDetectionKernel_" + std::to_string(bitsPerSample),
+                      {Binding{"inputStreams", inputStreams, FixedRate(1)}},
+                      {},
+                      {Binding{"peakAmplitude", peakAmplitude, InternalScalar()}},
+                      {}, {})
+    , bitsPerSample(bitsPerSample)
+    , numInputStreams(inputStreams->getNumElements())
+    {
+        if (inputStreams->getNumElements() != bitsPerSample) {
+            throw std::invalid_argument(
+                "bitsPerSample: " + std::to_string(bitsPerSample) +
+                " != numInputStreams: " + std::to_string(inputStreams->getNumElements()));
+        }
+    }
+
+protected:
+    void generateMultiBlockLogic(KernelBuilder & b, llvm::Value * const numOfStrides) override {
+        // Set up the basic blocks for our loop
+        BasicBlock * entry = b.GetInsertBlock();
+        BasicBlock * loop = b.CreateBasicBlock("loop");
+        BasicBlock * exit = b.CreateBasicBlock("exit");
+
+        // Constants and helper values
+        Constant * const ZERO = b.getSize(0);
+        Value * numOfBlocks = numOfStrides;
+
+        // Initialize the max amplitude value
+        Value * maxAmplitude = b.getScalarField("peakAmplitude");
+
+        // Branch to the loop
+        b.CreateBr(loop);
+
+        // Main processing loop
+        b.SetInsertPoint(loop);
+        PHINode * blockOffsetPhi = b.CreatePHI(b.getSizeTy(), 2);
+        blockOffsetPhi->addIncoming(ZERO, entry);
+
+        // Load input streams (bit-parallel representation)
+        std::vector<Value *> bitStreams(bitsPerSample);
+        for (unsigned i = 0; i < bitsPerSample; i++) {
+            bitStreams[i] = b.loadInputStreamBlock("inputStreams", b.getSize(i), blockOffsetPhi);
+        }
+
+        // Get the sign bit (MSB)
+        Value * signBit = bitStreams[bitsPerSample - 1];
+
+        // For all bits except the sign bit, apply two's complement conversion for negative values
+        std::vector<Value *> processedBits(bitsPerSample - 1);
+        for (unsigned i = 0; i < bitsPerSample - 1; i++) {
+            // XOR with sign bit to flip bits for negative values
+            processedBits[i] = b.CreateXor(bitStreams[i], signBit);
+        }
+
+        // For 2's complement, add 1 to negative values
+        Value * carryIn = signBit; // Only add 1 to negative values
+
+        // Construct absolute value by doing addition with carry
+        std::vector<Value *> absBits(bitsPerSample - 1);
+        for (unsigned i = 0; i < bitsPerSample - 1; i++) {
+            // Add with carry
+            Value * sum = b.CreateXor(processedBits[i], carryIn);
+            // Calculate carry out
+            Value * carryOut = b.CreateAnd(processedBits[i], carryIn);
+            absBits[i] = sum;
+            carryIn = carryOut;
+        }
+
+        // Now find the maximum value in this block
+        Type * blockTy = bitStreams[0]->getType();
+        Value * blockMax = UndefValue::get(blockTy);
+        Value * isGreater = Constant::getNullValue(blockTy);
+
+        // Initialize blockMax to 0
+        blockMax = Constant::getNullValue(blockTy);
+
+        // MSB comparison logic
+        for (int i = bitsPerSample - 2; i >= 0; i--) {
+            Value * currentBit = absBits[i];
+            Value * maxBit = blockMax;
+
+            // If current bit is 1 and max bit is 0, set isGreater flag
+            Value * newGreater = b.CreateAnd(b.CreateNot(maxBit), currentBit);
+            isGreater = b.CreateOr(isGreater, newGreater);
+
+            // Update blockMax for this bit position if isGreater
+            blockMax = b.CreateSelect(isGreater, currentBit, blockMax);
+        }
+
+        // Convert the block max to a scalar
+        // TODO This should take 3 arguments in the packl so investigate how to do this
+        Value * blockMaxInt = b.hsimd_packl(1, blockMax);
+        blockMaxInt = b.CreateZExtOrTrunc(blockMaxInt, b.getInt32Ty());
+
+        // Compare with current max and update if needed
+        Value * currentMax = b.CreateLoad(b.getInt32Ty(), maxAmplitude);
+        Value * newMax = b.CreateSelect(
+            b.CreateICmpUGT(blockMaxInt, currentMax),
+            blockMaxInt,
+            currentMax
+        );
+        b.CreateStore(newMax, maxAmplitude);
+
+        // Loop control
+        Value * nextBlk = b.CreateAdd(blockOffsetPhi, b.getSize(1));
+        blockOffsetPhi->addIncoming(nextBlk, loop);
+        Value * moreToDo = b.CreateICmpNE(nextBlk, numOfBlocks);
+
+        b.CreateCondBr(moreToDo, loop, exit);
+
+        // Exit block
+        b.SetInsertPoint(exit);
+    }
+
+private:
+    const unsigned int bitsPerSample;
+    const unsigned int numInputStreams;
+};
+
+
 typedef void (*PipelineFunctionType)(StreamSetPtr & ss_buf, int32_t fd);
-
-// This was moved to audio.cpp
-
-// class NormalizePabloKernel final : public PabloKernel {
-//     public:
-//         NormalizePabloKernel(LLVMTypeSystemInterface & b, const unsigned int bitsPerSample,
-//                              StreamSet * const inputStreams, Scalar * const gainFactor,
-//                              StreamSet * const outputStreams)
-//
-//             : PabloKernel(b, "NormalizePabloKernel",
-//                           {Binding{"input", inputStreams}, Binding{"gain", gainFactor}}, {Binding{"output", outputStreams}})
-//             , mBitsPerSample(bitsPerSample) {}
-//
-//     protected:
-//         void generatePabloMethod() override {
-//             PabloBuilder pb(getEntryScope());
-//
-//             Var *input = getInput(0);
-//
-//             Var *gain = getInput(1);
-//             Var *normalized = pb.createMul(input, gain); // this might need more adjustments
-//
-//
-//             unsigned int maxAmplitude = (1 << (mBitsPerSample - 1)) - 1; // not sure about this part using pcm
-//             Var *clamped = pb.createMin(normalized, pb.createConstant(maxAmplitude));
-//
-//             Var *output = getOutput(0);
-//             pb.createAssign(output, clamped);
-//         }
-//
-//     private:
-//         unsigned int mBitsPerSample;
-//     };
-
-// PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &numChannels, const unsigned int &bitsPerSample)
-// {
-//
-//     auto P = CreatePipeline(pxDriver, Output<streamset_t>("OutputBytes", 1, bitsPerSample * numChannels, ReturnedBuffer(1)), Input<int32_t>("inputFileDecriptor"));
-//
-//     StreamSet * OutputBytes = P.getOutputStreamSet("OutputBytes");
-//
-//     Scalar * const fileDescriptor = P.getInputScalar("inputFileDecriptor");
-//
-//     std::vector<StreamSet *> ChannelSampleStreams(numChannels);
-//     for (unsigned i=0;i<numChannels;++i)
-//     {
-//         ChannelSampleStreams[i] = P.CreateStreamSet(1,bitsPerSample);
-//     }
-//
-//     ParseAudioBuffer(P, fileDescriptor, numChannels, bitsPerSample, ChannelSampleStreams);
-//
-//     std::vector<StreamSet *> NormalizedSampleStreams(numChannels);
-//
-//     for (unsigned i = 0; i < numChannels; ++i)
-//     {
-//         StreamSet* BasisBits = P.CreateStreamSet(bitsPerSample);
-//         S2P(P, bitsPerSample, ChannelSampleStreams[i], BasisBits);
-//         SHOW_BIXNUM(BasisBits);
-//
-//         // Create scalars don't appear to work the way you're calling them here
-//
-//         // Scalar *peakAmplitude = P.CreateScalar("PeakAmplitude", bitsPerSample); // need peak detection for proper normalizing
-//         // P.CreateKernelCall<PeakDetectionKernel>(bitsPerSample, BasisBits, peakAmplitude);
-//
-//         // Scalar *gainFactor = P.CreateScalar("GainFactor", bitsPerSample);
-//         // Scalar *gainFactor = P.CreateScalar(P.getInt64Ty());
-//         // P.CreateKernelCall<ComputeGainKernel>(peakAmplitude, gainFactor); // this needs further edge case testing
-//
-//         StreamSet *NormalizedBasisBits = P.CreateStreamSet(bitsPerSample);
-//         P.CreateKernelCall<NormalizePabloKernel>(bitsPerSample, BasisBits, nullptr, NormalizedBasisBits);
-//         //SHOW_STREAM(NormalizedBasisBits);
-//
-//         NormalizedSampleStreams[i] = P.CreateStreamSet(1, bitsPerSample);
-//         P2S(P, NormalizedBasisBits, NormalizedSampleStreams[i]);
-//         //SHOW_BYTES(OutputStreams[i]);
-//     }
-//     //so that it works with mono too --------------- still needs thorough testing
-//     // Current merge kernel needs 5 arguments so have to change that before we handle only 1 channel
-//     // if (numChannels== 1) {
-//     //     P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], OutputBytes);
-//     // } else {
-//     //     P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], NormalizedSampleStreams[1], OutputBytes);
-//     // }
-//     P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], NormalizedSampleStreams[1], OutputBytes);
-//
-//     SHOW_BYTES(OutputBytes);
-//     return P.compile();
-// }
 
 PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &numChannels, const unsigned int &bitsPerSample) {
     auto P = CreatePipeline(pxDriver,
