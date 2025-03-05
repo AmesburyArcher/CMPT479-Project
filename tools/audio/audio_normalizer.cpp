@@ -76,6 +76,8 @@ protected:
 
         // Initialize the max amplitude value
         Value * maxAmplitude = b.getScalarField("peakAmplitude");
+        // initializing maxAmplitude to 0
+        b.CreateStore(b.getSize(0), maxAmplitude);
 
         // Branch to the loop
         b.CreateBr(loop);
@@ -136,9 +138,13 @@ protected:
             blockMax = b.CreateSelect(isGreater, currentBit, blockMax);
         }
 
-        // Convert the block max to a scalar
+        // reducing the blockMax, shifting right by 16bits, and then combing them w bitwise OR
+        Value * reducedMax = b.CreateOr(blockMax, b.CreateLShr(blockMax, 16));
         // TODO This should take 3 arguments in the packl so investigate how to do this
-        Value * blockMaxInt = b.hsimd_packl(1, blockMax);
+        // did the above TODO, should be tested still / KZ
+        // using the same reducedMax value to ensure we propagate the reduced max to every element
+        // this also solves the problem mentioned in TODO
+        Value * blockMaxInt = b.hsimd_packl(bitsPerSample, reducedMax, reducedMax);
         blockMaxInt = b.CreateZExtOrTrunc(blockMaxInt, b.getInt32Ty());
 
         // Compare with current max and update if needed
@@ -205,9 +211,13 @@ PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &
         P2S(P, NormalizedBasisBits, NormalizedSampleStreams[i]);
         SHOW_BYTES(NormalizedSampleStreams[i]);
     }
-
-    P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], NormalizedSampleStreams[1], OutputBytes);
-
+    // made it dynamic so that it works for both mono and multi channels
+    std::vector<StreamSet *> normalizedOutputs(numChannels);
+    for (unsigned i = 0; i < numChannels; ++i) {
+        normalizedOutputs[i] = NormalizedSampleStreams[i];
+    }
+    
+    P.CreateKernelCall<MergeKernel>(bitsPerSample, normalizedOutputs, OutputBytes);
     SHOW_BYTES(OutputBytes);
     return P.compile();
 }
@@ -250,7 +260,21 @@ int main(int argc, char *argv[])
                 write(fd_out, header.c_str(), header.size());
             }
             // NOTE: Despite a sample can be 8, 16, 32, etc. we treat the stream as bytestream (8-bit) to make it consistent with existing kernels.
-            write(fd_out, wavStream.data<8>(), wavStream.length() * numChannels * (bitsPerSample / 8));
+            // write(fd_out, wavStream.data<8>(), wavStream.length() * numChannels * (bitsPerSample / 8));
+
+            // the following fixes the problem for diff common sample sizes, to be tested
+            size_t sampleSize = bitsPerSample / 8;
+
+            if (bitsPerSample == 8) {
+                write(fd_out, wavStream.data<uint8_t>(), wavStream.length() * numChannels * sampleSize);
+            } else if (bitsPerSample== 16) {
+                write(fd_out, wavStream.data<uint16_t>(), wavStream.length() * numChannels * sampleSize);
+            } else if (bitsPerSample == 32) {
+                write(fd_out,wavStream.data<uint32_t>(), wavStream.length() *numChannels * sampleSize);
+            } else {
+                 llvm::errs() << "Unsupported bits per sample:" << bitsPerSample << "\n";
+            }
+
             close(fd_out);
         }
     }
