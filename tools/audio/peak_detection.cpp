@@ -105,7 +105,7 @@ protected:
         }
 
         // For 2's complement, add 1 to negative values
-        Value * carryIn = signBit; // Only add 1 to negative values
+        Value * carryIn = signBit; // Only add 1 to negative values 
 
         // Construct absolute value by doing addition with carry
         std::vector<Value *> absBits(bitsPerSample - 1);
@@ -115,16 +115,19 @@ protected:
             // Calculate carry out
             Value * carryOut = b.CreateAnd(processedBits[i], carryIn);
             absBits[i] = sum;
-            carryIn = carryOut;
+            // carryIn = carryOut;--------------------------------------------------------------
+            carryIn = b.CreateOr(carryOut, carryIn); // Propagate carry correctly-----------------
         }
 
         // Now find the maximum value in this block
         Type * blockTy = bitStreams[0]->getType();
-        Value * blockMax = UndefValue::get(blockTy);
+        // Value * blockMax = UndefValue::get(blockTy); ---------------------------------
         Value * isGreater = Constant::getNullValue(blockTy);
 
+        Value * blockMax = absBits[0];  // Start with the first absolute value---------------------
+
         // Initialize blockMax to 0
-        blockMax = Constant::getNullValue(blockTy);
+        // blockMax = Constant::getNullValue(blockTy);---------------
 
         // MSB comparison logic
         for (int i = bitsPerSample - 2; i >= 0; i--) {
@@ -136,13 +139,19 @@ protected:
             isGreater = b.CreateOr(isGreater, newGreater);
 
             // Update blockMax for this bit position if isGreater
-            blockMax = b.CreateSelect(isGreater, currentBit, blockMax);
+            // blockMax = b.CreateSelect(isGreater, currentBit, blockMax) ------------------------
+            blockMax = b.CreateSelect(b.CreateICmpUGT(currentBit, blockMax), currentBit, blockMax); //-------
         }
 
         // reducing the blockMax, shifting right by 16bits, and then combing them w bitwise OR
-        Value * reducedMax = b.CreateOr(blockMax, b.CreateLShr(blockMax, 16));
-        Value * blockMaxInt = b.hsimd_packl(bitsPerSample, reducedMax, reducedMax);
-        blockMaxInt = b.CreateZExtOrTrunc(blockMaxInt, b.getInt32Ty());
+        // Value * reducedMax = b.CreateOr(blockMax, b.CreateLShr(blockMax, 16));------------------
+        // Value * blockMaxInt = b.hsimd_packl(bitsPerSample, reducedMax, reducedMax);-----------------
+
+        for (int shift = bitsPerSample / 2; shift > 0; shift /= 2) {
+            blockMax = b.CreateOr(blockMax, b.CreateLShr(blockMax, shift));
+        }
+        Value * blockMaxInt = b.CreateZExtOrTrunc(blockMax, b.getInt32Ty());
+        
 
         // Compare with current max and update if needed
         Value * currentMax = b.CreateLoad(b.getInt32Ty(), maxAmplitude);
@@ -151,7 +160,9 @@ protected:
             blockMaxInt,
             currentMax
         );
-        b.CreateStore(newMax, maxAmplitude);
+        // b.CreateStore(newMax, maxAmplitude);--------------------
+        Value * finalMax = b.CreateZExtOrTrunc(newMax, b.getInt32Ty());
+        b.CreateStore(finalMax, maxAmplitude);
 
         // Loop control
         Value * nextBlk = b.CreateAdd(blockOffsetPhi, b.getSize(1));
@@ -159,6 +170,11 @@ protected:
         Value * moreToDo = b.CreateICmpNE(nextBlk, numOfBlocks);
 
         b.CreateCondBr(moreToDo, loop, exit);
+        // for debugging purposes
+        b.CreatePrint("Final Block Max:", blockMax);
+        b.CreatePrint("Current Max Amplitude:", currentMax);
+        b.CreatePrint("New Max Amplitude Stored:", newMax);
+
 
         // Exit block
         b.SetInsertPoint(exit);
@@ -202,7 +218,7 @@ PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &
     // Pass through the mono stream to output
     P2S(P, monoStream, OutputBytes);
     SHOW_BYTES(OutputBytes);
-    
+    ;
     auto compiledFn = P.compile();
     return reinterpret_cast<PipelineFunctionType>(compiledFn);
 }
