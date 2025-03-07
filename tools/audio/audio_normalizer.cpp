@@ -42,138 +42,8 @@ static cl::OptionCategory DemoOptions("Demo Options", "Demo control options.");
 static cl::opt<std::string> inputFile(cl::Positional, cl::desc("<input file>"), cl::Required, cl::cat(DemoOptions));
 static cl::opt<std::string> outputFile("o", cl::desc("Specify a file to save the modified .wav file."), cl::cat(DemoOptions));
 
-class PeakDetectionKernel final : public MultiBlockKernel {
-public:
-    PeakDetectionKernel(LLVMTypeSystemInterface & b,
-                         const unsigned int bitsPerSample,
-                         StreamSet * const inputStreams,
-                         Scalar * const peakAmplitude)
-    : MultiBlockKernel(b, "PeakDetectionKernel_" + std::to_string(bitsPerSample),
-                      {Binding{"inputStreams", inputStreams, FixedRate(1)}},
-                      {},
-                      {Binding{"peakAmplitude", peakAmplitude, InternalScalar()}},
-                      {}, {})
-    , bitsPerSample(bitsPerSample)
-    , numInputStreams(inputStreams->getNumElements())
-    {
-        if (inputStreams->getNumElements() != bitsPerSample) {
-            throw std::invalid_argument(
-                "bitsPerSample: " + std::to_string(bitsPerSample) +
-                " != numInputStreams: " + std::to_string(inputStreams->getNumElements()));
-        }
-    }
-
-protected:
-    void generateMultiBlockLogic(KernelBuilder & b, llvm::Value * const numOfStrides) override {
-        // Set up the basic blocks for our loop
-        BasicBlock * entry = b.GetInsertBlock();
-        BasicBlock * loop = b.CreateBasicBlock("loop");
-        BasicBlock * exit = b.CreateBasicBlock("exit");
-
-        // Constants and helper values
-        Constant * const ZERO = b.getSize(0);
-        Value * numOfBlocks = numOfStrides;
-
-        // Initialize the max amplitude value
-        Value * maxAmplitude = b.getScalarField("peakAmplitude");
-        // initializing maxAmplitude to 0
-        b.CreateStore(b.getSize(0), maxAmplitude);
-
-        // Branch to the loop
-        b.CreateBr(loop);
-
-        // Main processing loop
-        b.SetInsertPoint(loop);
-        PHINode * blockOffsetPhi = b.CreatePHI(b.getSizeTy(), 2);
-        blockOffsetPhi->addIncoming(ZERO, entry);
-
-        // Load input streams (bit-parallel representation)
-        std::vector<Value *> bitStreams(bitsPerSample);
-        for (unsigned i = 0; i < bitsPerSample; i++) {
-            bitStreams[i] = b.loadInputStreamBlock("inputStreams", b.getSize(i), blockOffsetPhi);
-        }
-
-        // Get the sign bit (MSB)
-        Value * signBit = bitStreams[bitsPerSample - 1];
-
-        // For all bits except the sign bit, apply two's complement conversion for negative values
-        std::vector<Value *> processedBits(bitsPerSample - 1);
-        for (unsigned i = 0; i < bitsPerSample - 1; i++) {
-            // XOR with sign bit to flip bits for negative values
-            processedBits[i] = b.CreateXor(bitStreams[i], signBit);
-        }
-
-        // For 2's complement, add 1 to negative values
-        Value * carryIn = signBit; // Only add 1 to negative values
-
-        // Construct absolute value by doing addition with carry
-        std::vector<Value *> absBits(bitsPerSample - 1);
-        for (unsigned i = 0; i < bitsPerSample - 1; i++) {
-            // Add with carry
-            Value * sum = b.CreateXor(processedBits[i], carryIn);
-            // Calculate carry out
-            Value * carryOut = b.CreateAnd(processedBits[i], carryIn);
-            absBits[i] = sum;
-            carryIn = carryOut;
-        }
-
-        // Now find the maximum value in this block
-        Type * blockTy = bitStreams[0]->getType();
-        Value * blockMax = UndefValue::get(blockTy);
-        Value * isGreater = Constant::getNullValue(blockTy);
-
-        // Initialize blockMax to 0
-        blockMax = Constant::getNullValue(blockTy);
-
-        // MSB comparison logic
-        for (int i = bitsPerSample - 2; i >= 0; i--) {
-            Value * currentBit = absBits[i];
-            Value * maxBit = blockMax;
-
-            // If current bit is 1 and max bit is 0, set isGreater flag
-            Value * newGreater = b.CreateAnd(b.CreateNot(maxBit), currentBit);
-            isGreater = b.CreateOr(isGreater, newGreater);
-
-            // Update blockMax for this bit position if isGreater
-            blockMax = b.CreateSelect(isGreater, currentBit, blockMax);
-        }
-
-        // reducing the blockMax, shifting right by 16bits, and then combing them w bitwise OR
-        Value * reducedMax = b.CreateOr(blockMax, b.CreateLShr(blockMax, 16));
-        // TODO This should take 3 arguments in the packl so investigate how to do this
-        // did the above TODO, should be tested still / KZ
-        // using the same reducedMax value to ensure we propagate the reduced max to every element
-        // this also solves the problem mentioned in TODO
-        Value * blockMaxInt = b.hsimd_packl(bitsPerSample, reducedMax, reducedMax);
-        blockMaxInt = b.CreateZExtOrTrunc(blockMaxInt, b.getInt32Ty());
-
-        // Compare with current max and update if needed
-        Value * currentMax = b.CreateLoad(b.getInt32Ty(), maxAmplitude);
-        Value * newMax = b.CreateSelect(
-            b.CreateICmpUGT(blockMaxInt, currentMax),
-            blockMaxInt,
-            currentMax
-        );
-        b.CreateStore(newMax, maxAmplitude);
-
-        // Loop control
-        Value * nextBlk = b.CreateAdd(blockOffsetPhi, b.getSize(1));
-        blockOffsetPhi->addIncoming(nextBlk, loop);
-        Value * moreToDo = b.CreateICmpNE(nextBlk, numOfBlocks);
-
-        b.CreateCondBr(moreToDo, loop, exit);
-
-        // Exit block
-        b.SetInsertPoint(exit);
-    }
-
-private:
-    const unsigned int bitsPerSample;
-    const unsigned int numInputStreams;
-};
-
-
 typedef void (*PipelineFunctionType)(StreamSetPtr & ss_buf, int32_t fd);
+
 
 PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &numChannels, const unsigned int &bitsPerSample) {
     auto P = CreatePipeline(pxDriver,
@@ -211,13 +81,9 @@ PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &
         P2S(P, NormalizedBasisBits, NormalizedSampleStreams[i]);
         SHOW_BYTES(NormalizedSampleStreams[i]);
     }
-    // made it dynamic so that it works for both mono and multi channels
-    std::vector<StreamSet *> normalizedOutputs(numChannels);
-    for (unsigned i = 0; i < numChannels; ++i) {
-        normalizedOutputs[i] = NormalizedSampleStreams[i];
-    }
-    
-    P.CreateKernelCall<MergeKernel>(bitsPerSample, normalizedOutputs, OutputBytes);
+
+    P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], NormalizedSampleStreams[1], OutputBytes);
+
     SHOW_BYTES(OutputBytes);
     return P.compile();
 }
@@ -246,7 +112,7 @@ int main(int argc, char *argv[])
     auto fn = generatePipeline(driver, numChannels, bitsPerSample);
     StreamSetPtr wavStream;
 
-    
+
     fn(wavStream, fd);
 
 
@@ -260,21 +126,7 @@ int main(int argc, char *argv[])
                 write(fd_out, header.c_str(), header.size());
             }
             // NOTE: Despite a sample can be 8, 16, 32, etc. we treat the stream as bytestream (8-bit) to make it consistent with existing kernels.
-            // write(fd_out, wavStream.data<8>(), wavStream.length() * numChannels * (bitsPerSample / 8));
-
-            // the following fixes the problem for diff common sample sizes, to be tested
-            size_t sampleSize = bitsPerSample / 8;
-
-            if (bitsPerSample == 8) {
-                write(fd_out, wavStream.data<uint8_t>(), wavStream.length() * numChannels * sampleSize);
-            } else if (bitsPerSample== 16) {
-                write(fd_out, wavStream.data<uint16_t>(), wavStream.length() * numChannels * sampleSize);
-            } else if (bitsPerSample == 32) {
-                write(fd_out,wavStream.data<uint32_t>(), wavStream.length() *numChannels * sampleSize);
-            } else {
-                 llvm::errs() << "Unsupported bits per sample:" << bitsPerSample << "\n";
-            }
-
+            write(fd_out, wavStream.data<8>(), wavStream.length() * numChannels * (bitsPerSample / 8));
             close(fd_out);
         }
     }
