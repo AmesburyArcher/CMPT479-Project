@@ -146,8 +146,10 @@ protected:
         // reducing the blockMax, shifting right by 16bits, and then combing them w bitwise OR
         // Value * reducedMax = b.CreateOr(blockMax, b.CreateLShr(blockMax, 16));------------------
         // Value * blockMaxInt = b.hsimd_packl(bitsPerSample, reducedMax, reducedMax);-----------------
+        // TRY ME! take out the loop below tho and uncomment the line below-----------------------------TRY ME---------------
+        // Value * blockMaxInt = b.hsimd_packl(bitsPerSample, blockMax, blockMax);
 
-        for (int shift = bitsPerSample / 2; shift > 0; shift /= 2) {
+        for (int shift = bitsPerSample / 2; shift > 0; shift /=2) {
             blockMax = b.CreateOr(blockMax, b.CreateLShr(blockMax, shift));
         }
         Value * blockMaxInt = b.CreateZExtOrTrunc(blockMax, b.getInt32Ty());
@@ -171,9 +173,9 @@ protected:
 
         b.CreateCondBr(moreToDo, loop, exit);
         // for debugging purposes
-        b.CreatePrint("Final Block Max:", blockMax);
-        b.CreatePrint("Current Max Amplitude:", currentMax);
-        b.CreatePrint("New Max Amplitude Stored:", newMax);
+        llvm::errs() << "Final Block Max: " << blockMax << "\n";
+        llvm::errs() << "Current Max Amplitude: " << currentMax << "\n";
+        llvm::errs() << "New Max Amplitude Stored: " << newMax << "\n";
 
 
         // Exit block
