@@ -51,7 +51,6 @@ public:
                       {Binding{"inputStreams", inputStreams, FixedRate(1)}},
                       {},
                       {Binding{"peakAmplitude", peakAmplitude}},
-                      {Binding{"peakAmplitude", peakAmplitude}},
                       {})
     , bitsPerSample(bitsPerSample)
     , numInputStreams(inputStreams->getNumElements())
@@ -173,9 +172,9 @@ protected:
 
         b.CreateCondBr(moreToDo, loop, exit);
         // for debugging purposes
-        llvm::errs() << "Final Block Max: " << blockMax << "\n";
-        llvm::errs() << "Current Max Amplitude: " << currentMax << "\n";
-        llvm::errs() << "New Max Amplitude Stored: " << newMax << "\n";
+        // llvm::errs() << "Final Block Max: " << blockMax << "\n";
+        // llvm::errs() << "Current Max Amplitude: " << currentMax << "\n";
+        // llvm::errs() << "New Max Amplitude Stored: " << newMax << "\n";
 
 
         // Exit block
@@ -209,7 +208,7 @@ PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &
     ParseAudioBuffer(P, fileDescriptor, 1, bitsPerSample, channels, false);
 
     // Convert serial to parallel
-    StreamSet* BasisBits = P.CreateStreamSet(bitsPerSample);
+    StreamSet* BasisBits = P.CreateStreamSet(1, bitsPerSample);
     S2P(P, bitsPerSample, monoStream, BasisBits);
     SHOW_BIXNUM(BasisBits);
 
