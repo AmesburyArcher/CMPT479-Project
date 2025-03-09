@@ -51,6 +51,7 @@ public:
                       {Binding{"inputStreams", inputStreams, FixedRate(1)}},
                       {},
                       {Binding{"peakAmplitude", peakAmplitude}},
+                      {Binding{"peakAmplitude", peakAmplitude}},
                       {})
     , bitsPerSample(bitsPerSample)
     , numInputStreams(inputStreams->getNumElements())
