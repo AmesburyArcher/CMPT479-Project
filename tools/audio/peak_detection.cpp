@@ -190,7 +190,7 @@ private:
     const unsigned int numInputStreams;
 };
 
-
+// comment added for sole purpose of updating commit tag;  to be deleted
 typedef void (*PipelineFunctionType)(StreamSetPtr & ss_buf, int32_t fd, int32_t & peak);
 
 PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &bitsPerSample) {
