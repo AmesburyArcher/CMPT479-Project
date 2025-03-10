@@ -56,6 +56,9 @@ public:
     , bitsPerSample(bitsPerSample)
     , numInputStreams(inputStreams->getNumElements())
     {
+        std::cerr << "Debug: bitsPerSample = " << bitsPerSample 
+                  << ", numInputStreams = " << inputStreams->getNumElements() << std::endl;
+
         if (inputStreams->getNumElements() != bitsPerSample) {
             throw std::invalid_argument(
                 "bitsPerSample: " + std::to_string(bitsPerSample) +
