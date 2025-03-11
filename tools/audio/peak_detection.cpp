@@ -50,17 +50,17 @@ public:
     : MultiBlockKernel(b, "PeakDetectionKernel_" + std::to_string(bitsPerSample),
                       {Binding{"inputStreams", inputStreams, FixedRate(1)}},
                       {},
-                      {Binding{"peakAmplitude", peakAmplitude}},
+                      {},
                       {Binding{"peakAmplitude", peakAmplitude}},
                       {})
     , bitsPerSample(bitsPerSample)
     , numInputStreams(inputStreams->getNumElements())
     {
-        if (inputStreams->getNumElements() != bitsPerSample) {
-            throw std::invalid_argument(
-                "bitsPerSample: " + std::to_string(bitsPerSample) +
-                " != numInputStreams: " + std::to_string(inputStreams->getNumElements()));
-        }
+        // if (inputStreams->getNumElements() != bitsPerSample) {
+        //     throw std::invalid_argument(
+        //         "bitsPerSample: " + std::to_string(bitsPerSample) +
+        //         " != numInputStreams: " + std::to_string(inputStreams->getNumElements()));
+        // }
     }
 
 protected:
@@ -105,7 +105,7 @@ protected:
         }
 
         // For 2's complement, add 1 to negative values
-        Value * carryIn = signBit; // Only add 1 to negative values 
+        Value * carryIn = signBit; // Only add 1 to negative values
 
         // Construct absolute value by doing addition with carry
         std::vector<Value *> absBits(bitsPerSample - 1);
@@ -153,7 +153,7 @@ protected:
             blockMax = b.CreateOr(blockMax, b.CreateLShr(blockMax, shift));
         }
         Value * blockMaxInt = b.CreateZExtOrTrunc(blockMax, b.getInt32Ty());
-        
+
 
         // Compare with current max and update if needed
         Value * currentMax = b.CreateLoad(b.getInt32Ty(), maxAmplitude);
@@ -188,41 +188,35 @@ private:
 };
 
 
-typedef void (*PipelineFunctionType)(StreamSetPtr & ss_buf, int32_t fd, int32_t & peak);
+typedef int32_t (*PipelineFn)(StreamSetPtr & ss_buf, int32_t fd);
 
-PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &bitsPerSample) {
+PipelineFn generatePipeline(CPUDriver & pxDriver, const unsigned int &bitsPerSample) {
     std::cout << "Generating pipeline..." << std::endl;
     auto P = CreatePipeline(pxDriver,
         Output<streamset_t>("OutputBytes", 1, bitsPerSample, ReturnedBuffer(1)),
-        Input<int32_t>("inputFileDecriptor"),
+        Input<int32_t>("inputFileDescriptor"),
         Output<int32_t>("peakAmplitude"));
 
-    StreamSet * OutputBytes = P.getOutputStreamSet("OutputBytes");
-    Scalar * const fileDescriptor = P.getInputScalar("inputFileDecriptor");
+    Scalar * const fileDescriptor = P.getInputScalar("inputFileDescriptor");
     Scalar * peakAmplitude = P.getOutputScalar("peakAmplitude");
 
     // Create stream for the mono channel
-    StreamSet * monoStream = P.CreateStreamSet(1, bitsPerSample);
+    StreamSet * monoStream = P.CreateStreamSet(bitsPerSample, 1);
     
     // Parse audio buffer (single channel)
     std::vector<StreamSet *> channels = {monoStream};
     ParseAudioBuffer(P, fileDescriptor, 1, bitsPerSample, channels, false);
 
     // Convert serial to parallel
-    StreamSet* BasisBits = P.CreateStreamSet(1, bitsPerSample);
+    StreamSet* BasisBits = P.CreateStreamSet(bitsPerSample, 1);
     S2P(P, bitsPerSample, monoStream, BasisBits);
     SHOW_BIXNUM(BasisBits);
 
     std::cout << "Before kernel call" << std::endl;
     // Detect peak amplitude directly into the output scalar
     P.CreateKernelCall<PeakDetectionKernel>(bitsPerSample, BasisBits, peakAmplitude);
-    
-    // Pass through the mono stream to output
-    P2S(P, monoStream, OutputBytes);
-    SHOW_BYTES(OutputBytes);
-    ;
-    auto compiledFn = P.compile();
-    return reinterpret_cast<PipelineFunctionType>(compiledFn);
+
+    return P.compile();
 }
 
 int main(int argc, char *argv[])
@@ -263,7 +257,7 @@ int main(int argc, char *argv[])
     StreamSetPtr wavStream;
     int32_t peakAmplitude = 0;
 
-    fn(wavStream, fd, peakAmplitude);
+    peakAmplitude = fn(wavStream, fd);
     
     // Calculate maximum possible amplitude based on bits per sample
     int32_t maxPossibleAmplitude = (1 << (bitsPerSample - 1)) - 1;
