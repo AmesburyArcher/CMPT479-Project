@@ -20,6 +20,7 @@
 #include <audio/audio.h>
 #include <audio/stream_manipulation.h>
 #include <iostream>
+#include <boost/intrusive/detail/math.hpp>
 #include <util/aligned_allocator.h>
 #include <kernel/pipeline/program_builder.h>
 
@@ -40,6 +41,63 @@ using namespace audio;
 
 static cl::OptionCategory PeakDetectionOptions("Peak Detection Options", "Peak detection control options.");
 static cl::opt<std::string> inputFile(cl::Positional, cl::desc("<input file>"), cl::Required, cl::cat(PeakDetectionOptions));
+
+// TODO Change peak detection kernel to the code commented below, should be nearly complete,
+// processing byte stream rather than bit streams. Use this as a foundation and changes are probably needed but is solid basis
+
+// ByteCombine::ByteCombine(LLVMTypeSystemInterface & ts,
+//                      StreamSet * const byteStream1,
+//                      StreamSet * const byteStream2,
+//                      StreamSet * const outputBytes)
+// : MultiBlockKernel(ts, "ByteCombine"
+// , {Binding{"byteStream1", byteStream1}, Binding{"byteStream2", byteStream2}}
+// , {Binding{"outputBytes", outputBytes}}, {}, {}, {}) {
+// }
+//
+// void ByteCombine::generateMultiBlockLogic(KernelBuilder & b, Value * const numOfStrides) {
+//     BasicBlock * entry = b.GetInsertBlock();
+//     BasicBlock * combineLoop = b.CreateBasicBlock("combineLoop");
+//     BasicBlock * combineDone = b.CreateBasicBlock("combineDone");
+//     Constant * const sz_ZERO = b.getSize(0);
+//     Value * numOfBlocks = numOfStrides;
+//     if (getStride() != b.getBitBlockWidth()) {
+//         numOfBlocks = b.CreateShl(numOfStrides, b.getSize(boost::intrusive::detail::floor_log2(getStride()/b.getBitBlockWidth())));
+//     }
+//
+//     Value * initialMax = b.getScalarField(x);
+//     Value * splatMax = b.simd_fill(8, initialMax);
+//
+//     b.CreateBr(combineLoop);
+//
+//     b.SetInsertPoint(combineLoop);
+//     PHINode * blockOffsetPhi = b.CreatePHI(b.getSizeTy(), 2);
+//     blockOffsetPhi->addIncoming(sz_ZERO, entry);
+//     PHINode * maxVectorPhi = b.CreatePHI(b.fwVectorType(8), 2);
+//     maxVectorPhi->addIncoming(splatMax, entry);
+//
+//     Value * newMax = maxVectorPhi;
+//     for (unsigned i = 0; i < 8; i++) {
+//         Value * bytepack1 = b.loadInputStreamPack("byteStream1", sz_ZERO, b.getInt32(i), blockOffsetPhi);
+//         newMax = b.CreateUMax(bytepack1, newMax);
+//     }
+//     Value * nextBlk = b.CreateAdd(blockOffsetPhi, b.getSize(1));
+//     blockOffsetPhi->addIncoming(nextBlk, combineLoop);
+//
+//     maxVectorPhi->addIncoming(newMax, combineDone);
+//     Value * moreToDo = b.CreateICmpNE(nextBlk, numOfBlocks);
+//     b.CreateCondBr(moreToDo, combineLoop, combineDone);
+//
+//     b.SetInsertPoint(combineDone);
+//
+//     // now newMax needs a horizontal max reduction
+//     Value * max2 = b.simd_umax(8, b.mvmd_srli(8, newMax, 1), newMax);
+//     Value * max3 = b.simd_umax(8, b.mvmd_srli(8, newMax, 2), max2);
+//     Value * max4 = b.simd_umax(8, b.mvmd_srli(8, newMax, 4), max3);
+//     Value * max5 = b.simd_umax(8, b.mvmd_srli(8, newMax, 8), max4);
+//     Value * maxToStore = b.CreateExtractElement(max5, 15);
+//     b.setScalarField("MaxSoFar", maxToStore);
+// }
+
 
 class PeakDetectionKernel final : public MultiBlockKernel {
 public:
@@ -77,14 +135,16 @@ protected:
 
         // Initialize the max amplitude value
         Value * maxAmplitude = b.getScalarField("peakAmplitude");
-        // initializing maxAmplitude to 0
-        b.CreateStore(b.getSize(0), maxAmplitude);
+
 
         // Branch to the loop
         b.CreateBr(loop);
 
         // Main processing loop
         b.SetInsertPoint(loop);
+        PHINode * maxAmplitudePhi = b.CreatePHI(b.getInt32Ty(), 2);
+        maxAmplitudePhi->addIncoming(maxAmplitude, entry);
+
         PHINode * blockOffsetPhi = b.CreatePHI(b.getSizeTy(), 2);
         blockOffsetPhi->addIncoming(ZERO, entry);
 
@@ -156,15 +216,13 @@ protected:
 
 
         // Compare with current max and update if needed
-        Value * currentMax = b.CreateLoad(b.getInt32Ty(), maxAmplitude);
         Value * newMax = b.CreateSelect(
-            b.CreateICmpUGT(blockMaxInt, currentMax),
+            b.CreateICmpUGT(blockMaxInt, maxAmplitudePhi),
             blockMaxInt,
-            currentMax
+            maxAmplitudePhi
         );
         // b.CreateStore(newMax, maxAmplitude);--------------------
-        Value * finalMax = b.CreateZExtOrTrunc(newMax, b.getInt32Ty());
-        b.CreateStore(finalMax, maxAmplitude);
+        maxAmplitudePhi->addIncoming(newMax, loop);
 
         // Loop control
         Value * nextBlk = b.CreateAdd(blockOffsetPhi, b.getSize(1));
@@ -180,6 +238,7 @@ protected:
 
         // Exit block
         b.SetInsertPoint(exit);
+        b.setScalarField("peakAmplitude", newMax);
     }
 
 private:
