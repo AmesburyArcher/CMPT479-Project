@@ -42,61 +42,11 @@ using namespace audio;
 static cl::OptionCategory PeakDetectionOptions("Peak Detection Options", "Peak detection control options.");
 static cl::opt<std::string> inputFile(cl::Positional, cl::desc("<input file>"), cl::Required, cl::cat(PeakDetectionOptions));
 
-// TODO Change peak detection kernel to the code commented below, should be nearly complete,
-// processing byte stream rather than bit streams. Use this as a foundation and changes are probably needed but is solid basis
-
-// ByteCombine::ByteCombine(LLVMTypeSystemInterface & ts,
-//                      StreamSet * const byteStream1,
-//                      StreamSet * const byteStream2,
-//                      StreamSet * const outputBytes)
-// : MultiBlockKernel(ts, "ByteCombine"
-// , {Binding{"byteStream1", byteStream1}, Binding{"byteStream2", byteStream2}}
-// , {Binding{"outputBytes", outputBytes}}, {}, {}, {}) {
-// }
-//
-// void ByteCombine::generateMultiBlockLogic(KernelBuilder & b, Value * const numOfStrides) {
-//     BasicBlock * entry = b.GetInsertBlock();
-//     BasicBlock * combineLoop = b.CreateBasicBlock("combineLoop");
-//     BasicBlock * combineDone = b.CreateBasicBlock("combineDone");
-//     Constant * const sz_ZERO = b.getSize(0);
-//     Value * numOfBlocks = numOfStrides;
-//     if (getStride() != b.getBitBlockWidth()) {
-//         numOfBlocks = b.CreateShl(numOfStrides, b.getSize(boost::intrusive::detail::floor_log2(getStride()/b.getBitBlockWidth())));
-//     }
-//
-//     Value * initialMax = b.getScalarField(x);
-//     Value * splatMax = b.simd_fill(8, initialMax);
-//
-//     b.CreateBr(combineLoop);
-//
-//     b.SetInsertPoint(combineLoop);
-//     PHINode * blockOffsetPhi = b.CreatePHI(b.getSizeTy(), 2);
-//     blockOffsetPhi->addIncoming(sz_ZERO, entry);
-//     PHINode * maxVectorPhi = b.CreatePHI(b.fwVectorType(8), 2);
-//     maxVectorPhi->addIncoming(splatMax, entry);
-//
-//     Value * newMax = maxVectorPhi;
-//     for (unsigned i = 0; i < 8; i++) {
-//         Value * bytepack1 = b.loadInputStreamPack("byteStream1", sz_ZERO, b.getInt32(i), blockOffsetPhi);
-//         newMax = b.CreateUMax(bytepack1, newMax);
-//     }
-//     Value * nextBlk = b.CreateAdd(blockOffsetPhi, b.getSize(1));
-//     blockOffsetPhi->addIncoming(nextBlk, combineLoop);
-//
-//     maxVectorPhi->addIncoming(newMax, combineDone);
-//     Value * moreToDo = b.CreateICmpNE(nextBlk, numOfBlocks);
-//     b.CreateCondBr(moreToDo, combineLoop, combineDone);
-//
-//     b.SetInsertPoint(combineDone);
-//
-//     // now newMax needs a horizontal max reduction
-//     Value * max2 = b.simd_umax(8, b.mvmd_srli(8, newMax, 1), newMax);
-//     Value * max3 = b.simd_umax(8, b.mvmd_srli(8, newMax, 2), max2);
-//     Value * max4 = b.simd_umax(8, b.mvmd_srli(8, newMax, 4), max3);
-//     Value * max5 = b.simd_umax(8, b.mvmd_srli(8, newMax, 8), max4);
-//     Value * maxToStore = b.CreateExtractElement(max5, 15);
-//     b.setScalarField("MaxSoFar", maxToStore);
-// }
+// TODO Changed peak detection kernel to the code below, should be nearly complete,
+// processing byte stream rather than bit streams. Use this as a foundation and changes are probably needed but is solid basis.
+// There is still some pseudocode in spots that need to be replaced
+// Gonna have to deal with absolute values because .wav file can have negative values, could probably also track global min from the samples and then
+// compare the abs(max) and abs(min) to see which is bigger to simplify logic
 
 
 class PeakDetectionKernel final : public MultiBlockKernel {
@@ -104,141 +54,67 @@ public:
     PeakDetectionKernel(LLVMTypeSystemInterface & b,
                          const unsigned int bitsPerSample,
                          StreamSet * const inputStreams,
-                         Scalar * peakAmplitude)
+                         Scalar * peakAmplitude,
+                         Scalar * initialAmplitude)
     : MultiBlockKernel(b, "PeakDetectionKernel_" + std::to_string(bitsPerSample),
                       {Binding{"inputStreams", inputStreams, FixedRate(1)}},
                       {},
-                      {},
+                      {Binding{"initialAmplitude", initialAmplitude}},
                       {Binding{"peakAmplitude", peakAmplitude}},
                       {})
     , bitsPerSample(bitsPerSample)
     , numInputStreams(inputStreams->getNumElements())
     {
-        // if (inputStreams->getNumElements() != bitsPerSample) {
-        //     throw std::invalid_argument(
-        //         "bitsPerSample: " + std::to_string(bitsPerSample) +
-        //         " != numInputStreams: " + std::to_string(inputStreams->getNumElements()));
-        // }
+        if (inputStreams->getNumElements() != bitsPerSample) {
+            throw std::invalid_argument(
+                "bitsPerSample: " + std::to_string(bitsPerSample) +
+                " != numInputStreams: " + std::to_string(inputStreams->getNumElements()));
+        }
     }
 
 protected:
     void generateMultiBlockLogic(KernelBuilder & b, llvm::Value * const numOfStrides) override {
-        // Set up the basic blocks for our loop
         BasicBlock * entry = b.GetInsertBlock();
-        BasicBlock * loop = b.CreateBasicBlock("loop");
-        BasicBlock * exit = b.CreateBasicBlock("exit");
-        std::cout << "Inside kernel" << std::endl;
-
-        // Constants and helper values
-        Constant * const ZERO = b.getSize(0);
+        BasicBlock * combineLoop = b.CreateBasicBlock("combineLoop");
+        BasicBlock * combineDone = b.CreateBasicBlock("combineDone");
+        Constant * const sz_ZERO = b.getSize(0);
         Value * numOfBlocks = numOfStrides;
+        if (getStride() != b.getBitBlockWidth()) {
+            numOfBlocks = b.CreateShl(numOfStrides, b.getSize(boost::intrusive::detail::floor_log2(getStride()/b.getBitBlockWidth())));
+        }
 
-        // Initialize the max amplitude value
-        Value * maxAmplitude = b.getScalarField("peakAmplitude");
+        Value * initialMax = b.getScalarField("initialAmplitude");
+        Value * splatMax = b.simd_fill(8, initialMax);
 
+        b.CreateBr(combineLoop);
 
-        // Branch to the loop
-        b.CreateBr(loop);
-
-        // Main processing loop
-        b.SetInsertPoint(loop);
-        PHINode * maxAmplitudePhi = b.CreatePHI(b.getInt32Ty(), 2);
-        maxAmplitudePhi->addIncoming(maxAmplitude, entry);
-
+        b.SetInsertPoint(combineLoop);
         PHINode * blockOffsetPhi = b.CreatePHI(b.getSizeTy(), 2);
-        blockOffsetPhi->addIncoming(ZERO, entry);
+        blockOffsetPhi->addIncoming(sz_ZERO, entry);
+        PHINode * maxVectorPhi = b.CreatePHI(b.fwVectorType(8), 2);
+        maxVectorPhi->addIncoming(splatMax, entry);
 
-        // Load input streams (bit-parallel representation)
-        std::vector<Value *> bitStreams(bitsPerSample);
-        for (unsigned i = 0; i < bitsPerSample; i++) {
-            bitStreams[i] = b.loadInputStreamBlock("inputStreams", b.getSize(i), blockOffsetPhi);
+        Value * newMax = maxVectorPhi;
+        for (unsigned i = 0; i < 8; i++) {
+            Value * bytepack1 = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i), blockOffsetPhi);
+            newMax = b.CreateUMax(bytepack1, newMax);
         }
-
-        // Get the sign bit (MSB)
-        Value * signBit = bitStreams[bitsPerSample - 1];
-
-        // For all bits except the sign bit, apply two's complement conversion for negative values
-        std::vector<Value *> processedBits(bitsPerSample - 1);
-        for (unsigned i = 0; i < bitsPerSample - 1; i++) {
-            // XOR with sign bit to flip bits for negative values
-            processedBits[i] = b.CreateXor(bitStreams[i], signBit);
-        }
-
-        // For 2's complement, add 1 to negative values
-        Value * carryIn = signBit; // Only add 1 to negative values
-
-        // Construct absolute value by doing addition with carry
-        std::vector<Value *> absBits(bitsPerSample - 1);
-        for (unsigned i = 0; i < bitsPerSample - 1; i++) {
-            // Add with carry
-            Value * sum = b.CreateXor(processedBits[i], carryIn);
-            // Calculate carry out
-            Value * carryOut = b.CreateAnd(processedBits[i], carryIn);
-            absBits[i] = sum;
-            // carryIn = carryOut;--------------------------------------------------------------
-            carryIn = b.CreateOr(carryOut, carryIn); // Propagate carry correctly-----------------
-        }
-
-        // Now find the maximum value in this block
-        Type * blockTy = bitStreams[0]->getType();
-        // Value * blockMax = UndefValue::get(blockTy); ---------------------------------
-        Value * isGreater = Constant::getNullValue(blockTy);
-
-        Value * blockMax = absBits[0];  // Start with the first absolute value---------------------
-
-        // Initialize blockMax to 0
-        // blockMax = Constant::getNullValue(blockTy);---------------
-
-        // MSB comparison logic
-        for (int i = bitsPerSample - 2; i >= 0; i--) {
-            Value * currentBit = absBits[i];
-            Value * maxBit = blockMax;
-
-            // If current bit is 1 and max bit is 0, set isGreater flag
-            Value * newGreater = b.CreateAnd(b.CreateNot(maxBit), currentBit);
-            isGreater = b.CreateOr(isGreater, newGreater);
-
-            // Update blockMax for this bit position if isGreater
-            // blockMax = b.CreateSelect(isGreater, currentBit, blockMax) ------------------------
-            blockMax = b.CreateSelect(b.CreateICmpUGT(currentBit, blockMax), currentBit, blockMax); //-------
-        }
-
-        // reducing the blockMax, shifting right by 16bits, and then combing them w bitwise OR
-        // Value * reducedMax = b.CreateOr(blockMax, b.CreateLShr(blockMax, 16));------------------
-        // Value * blockMaxInt = b.hsimd_packl(bitsPerSample, reducedMax, reducedMax);-----------------
-        // TRY ME! take out the loop below tho and uncomment the line below-----------------------------TRY ME---------------
-        // Value * blockMaxInt = b.hsimd_packl(bitsPerSample, blockMax, blockMax);
-
-        for (int shift = bitsPerSample / 2; shift > 0; shift /=2) {
-            blockMax = b.CreateOr(blockMax, b.CreateLShr(blockMax, shift));
-        }
-        Value * blockMaxInt = b.CreateZExtOrTrunc(blockMax, b.getInt32Ty());
-
-
-        // Compare with current max and update if needed
-        Value * newMax = b.CreateSelect(
-            b.CreateICmpUGT(blockMaxInt, maxAmplitudePhi),
-            blockMaxInt,
-            maxAmplitudePhi
-        );
-        // b.CreateStore(newMax, maxAmplitude);--------------------
-        maxAmplitudePhi->addIncoming(newMax, loop);
-
-        // Loop control
         Value * nextBlk = b.CreateAdd(blockOffsetPhi, b.getSize(1));
-        blockOffsetPhi->addIncoming(nextBlk, loop);
+        blockOffsetPhi->addIncoming(nextBlk, combineLoop);
+
+        maxVectorPhi->addIncoming(newMax, combineDone);
         Value * moreToDo = b.CreateICmpNE(nextBlk, numOfBlocks);
+        b.CreateCondBr(moreToDo, combineLoop, combineDone);
 
-        b.CreateCondBr(moreToDo, loop, exit);
-        // for debugging purposes
-        // llvm::errs() << "Final Block Max: " << blockMax << "\n";
-        // llvm::errs() << "Current Max Amplitude: " << currentMax << "\n";
-        // llvm::errs() << "New Max Amplitude Stored: " << newMax << "\n";
+        b.SetInsertPoint(combineDone);
 
-
-        // Exit block
-        b.SetInsertPoint(exit);
-        b.setScalarField("peakAmplitude", newMax);
+        // now newMax needs a horizontal max reduction
+        Value * max2 = b.simd_umax(8, b.mvmd_srli(8, newMax, 1), newMax);
+        Value * max3 = b.simd_umax(8, b.mvmd_srli(8, newMax, 2), max2);
+        Value * max4 = b.simd_umax(8, b.mvmd_srli(8, newMax, 4), max3);
+        Value * max5 = b.simd_umax(8, b.mvmd_srli(8, newMax, 8), max4);
+        Value * maxToStore = b.CreateExtractElement(max5, 15);
+        b.setScalarField("peakAmplitude", maxToStore);
     }
 
 private:
@@ -247,17 +123,18 @@ private:
 };
 
 
-typedef int32_t (*PipelineFn)(StreamSetPtr & ss_buf, int32_t fd);
+typedef int32_t (*PipelineFn)(int32_t fd, int32_t initialAmplitude);
 
 PipelineFn generatePipeline(CPUDriver & pxDriver, const unsigned int &bitsPerSample) {
     std::cout << "Generating pipeline..." << std::endl;
     auto P = CreatePipeline(pxDriver,
-        Output<streamset_t>("OutputBytes", 1, bitsPerSample, ReturnedBuffer(1)),
         Input<int32_t>("inputFileDescriptor"),
+        Input<int32_t>("initialAmplitude"),
         Output<int32_t>("peakAmplitude"));
 
     Scalar * const fileDescriptor = P.getInputScalar("inputFileDescriptor");
     Scalar * peakAmplitude = P.getOutputScalar("peakAmplitude");
+    Scalar * initialAmplitude = P.getInputScalar("initialAmplitude");
 
     // Create stream for the mono channel
     StreamSet * monoStream = P.CreateStreamSet(bitsPerSample, 1);
@@ -273,7 +150,7 @@ PipelineFn generatePipeline(CPUDriver & pxDriver, const unsigned int &bitsPerSam
 
     std::cout << "Before kernel call" << std::endl;
     // Detect peak amplitude directly into the output scalar
-    P.CreateKernelCall<PeakDetectionKernel>(bitsPerSample, BasisBits, peakAmplitude);
+    P.CreateKernelCall<PeakDetectionKernel>(bitsPerSample, BasisBits, peakAmplitude, initialAmplitude);
 
     return P.compile();
 }
@@ -313,10 +190,10 @@ int main(int argc, char *argv[])
     }
 
     auto fn = generatePipeline(driver, bitsPerSample);
-    StreamSetPtr wavStream;
+    int32_t initialAmplitude = 0;
     int32_t peakAmplitude = 0;
 
-    peakAmplitude = fn(wavStream, fd);
+    peakAmplitude = fn(fd, initialAmplitude);
     
     // Calculate maximum possible amplitude based on bits per sample
     int32_t maxPossibleAmplitude = (1 << (bitsPerSample - 1)) - 1;
