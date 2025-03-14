@@ -113,7 +113,9 @@ protected:
         Value * max3 = b.simd_umax(8, b.mvmd_srli(8, newMax, 2), max2);
         Value * max4 = b.simd_umax(8, b.mvmd_srli(8, newMax, 4), max3);
         Value * max5 = b.simd_umax(8, b.mvmd_srli(8, newMax, 8), max4);
-        Value * maxToStore = b.CreateExtractElement(max5, 15);
+
+        // for extracting the highest bit
+        Value * maxToStore = b.CreateExtractElement(max5, b.getInt32(15)); //--------changed this
         b.setScalarField("peakAmplitude", maxToStore);
     }
 
