@@ -97,7 +97,10 @@ protected:
         Value * newMax = maxVectorPhi;
         for (unsigned i = 0; i < 8; i++) {
             Value * bytepack1 = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i), blockOffsetPhi);
-            newMax = b.CreateUMax(bytepack1, newMax);
+            Value * absBytepack = b.simd_abs(8, bytepack1);  // this operation should return absolute values
+            newMax = b.CreateUMax(absBytepack, newMax);
+            // Value * bytepack1 = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i), blockOffsetPhi);
+            // newMax = b.CreateUMax(bytepack1, newMax);
         }
         Value * nextBlk = b.CreateAdd(blockOffsetPhi, b.getSize(1));
         blockOffsetPhi->addIncoming(nextBlk, combineLoop);
