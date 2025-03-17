@@ -1,0 +1,26 @@
+*   [33m4644d61a[m[33m ([m[1;36mHEAD -> [m[1;32mtesting[m[33m, [m[1;31morigin/testing[m[33m)[m Merge branch 'main' into testing
+[31m|[m[32m\[m  
+[31m|[m *   [33mc6985ac7[m[33m ([m[1;32mmain[m[33m)[m Merge remote-tracking branch 'parabix/master'
+[31m|[m [33m|[m[34m\[m  
+[31m|[m [33m|[m * [33m2eda910c[m[33m ([m[1;31mparabix/master[m[33m)[m Ensuring ccc values are in correct numeric order
+[31m|[m [33m|[m * [33m4a740f9f[m Restructuring to factor out Hangul constants
+[31m|[m [33m|[m * [33md3792b80[m Separated pipeline variations for nfd
+[31m|[m [33m|[m * [33m3ffb60fa[m IndexedShiftBack for multiple streams
+[31m|[m [33m|[m * [33m3aae7082[m Bug fix for bitonic sorting
+[31m|[m [33m|[m * [33mcb28556e[m Cleanup
+[31m|[m [33m|[m * [33mdd22d421[m Fixes for ssse3
+[31m|[m [33m|[m * [33m5b926339[m Bug fix for indexed shift back
+[31m|[m [33m|[m * [33m964d141d[m Fix for indexed shift back mode in nfd
+[31m|[m [33m|[m * [33m332f8d44[m Additional nfd filtering options; indexed shift back tests
+[31m|[m [33m|[m * [33mfe3d5182[m Longer indexed advance test
+[31m|[m [33m|[m *   [33m7485e5eb[m Merge branch 'nfd-filter-first' into nfd-filter-violations
+[31m|[m [33m|[m [35m|[m[36m\[m  
+[31m|[m [33m|[m [35m|[m * [33m80c7e4be[m Further nfd restructuring
+[31m|[m [33m|[m [35m|[m * [33md1d81bcb[m Restructuring/modularizing
+[31m|[m [33m|[m [35m|[m * [33mb48a1918[m Restructuring: use a single NFD_Data instance
+[31m|[m [33m|[m [35m|[m *   [33m84e9b1c3[m Merge branch 'master' into nfd-filter-first
+[31m|[m [33m|[m [35m|[m [1;31m|[m[1;32m\[m  
+[31m|[m [33m|[m [35m|[m * [1;32m|[m [33m85fbb1d1[m bug fix for initial buffer size
+[31m|[m [33m|[m [35m|[m * [1;32m|[m [33mdc3c5cdf[m Work in progress for multistage pipelines
+[31m|[m [33m|[m [35m|[m * [1;32m|[m [33m3d8134e4[m illustrator bug fix
+[31m|[m [33m|[m [35m|[m * [1;32m|[m [33m4b4d5c35[m Fix for ByteSpreadByMask

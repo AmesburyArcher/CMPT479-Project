@@ -138,12 +138,14 @@ PipelineFn generatePipeline(CPUDriver & pxDriver, const unsigned int &bitsPerSam
         Input<int32_t>("initialAmplitude"),
         Output<int32_t>("peakAmplitude"));
 
+        Max2Store = b.CreateZExt (maxToStore, b.getInt32Ty());
+
     Scalar * const fileDescriptor = P.getInputScalar("inputFileDescriptor");
     Scalar * peakAmplitude = P.getOutputScalar("peakAmplitude");
     Scalar * initialAmplitude = P.getInputScalar("initialAmplitude");
 
     // Create stream for the mono channel
-    StreamSet * monoStream = P.CreateStreamSet(bitsPerSample, 1);
+    StreamSet * monoStream = P.CreateStreamSet(1, bitsPerSample);
     
     // Parse audio buffer (single channel)
     std::vector<StreamSet *> channels = {monoStream};
