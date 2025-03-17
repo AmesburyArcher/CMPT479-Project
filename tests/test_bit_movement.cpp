@@ -63,12 +63,33 @@ auto marker =    BinaryStreamSet({"1011101001010000"});
 auto indexStrm = BinaryStreamSet({"1011101101011000"});
 auto advmarker = BinaryStreamSet({"0011101100011000"});
 
-TEST_CASE(indexedadvance1, marker, indexStrm, advmarker) {
+TEST_CASE(indexedadvance1, indexStrm, marker, advmarker) {
     auto Result = P.CreateStreamSet(1);
     P.CreateKernelCall<IndexedAdvance>(Input<0>(T), Input<1>(T), Result, 1);
     AssertEQ(P, Result, Input<2>(T));
 }
 
+auto bakmarker = BinaryStreamSet({"1011100101000000"});
+
+TEST_CASE(indexedshiftback1, indexStrm, marker, bakmarker) {
+    auto Result = P.CreateStreamSet(1);
+    P.CreateKernelCall<IndexedShiftBack>(Input<0>(T), Input<1>(T), Result);
+    AssertEQ(P, Result, Input<2>(T));
+}
+
+auto longmarker =    BinaryStreamSet({"..0.{25000}11001.{3277}1.01",
+                                      "..1.{25000}11111.{3277}1.11",
+                                      "..1.{25000}00110.{3277}1.10"});
+auto longindexStrm = BinaryStreamSet({"..1.{25000}11111.{3277}1.11"});
+auto longbakmarker = BinaryStreamSet({"..1.{25000}10011.{3277}0.10",
+                                      "..1.{25000}11111.{3277}1.10",
+                                      "..0.{25000}01101.{3277}1.00"});
+
+TEST_CASE(longindexedshiftback, longindexStrm, longmarker, longbakmarker) {
+    auto Result = P.CreateStreamSet(3);
+    P.CreateKernelCall<IndexedShiftBack>(Input<0>(T), Input<1>(T), Result);
+    AssertEQ(P, Result, Input<2>(T));
+}
 
 RUN_TESTS(
           CASE(insert_before1),
@@ -77,5 +98,7 @@ RUN_TESTS(
           CASE(insert_mult_before),
           CASE(filter1),
           CASE(spread1),
-          CASE(indexedadvance1)
+          CASE(indexedadvance1),
+          CASE(indexedshiftback1),
+          CASE(longindexedshiftback)
 )
