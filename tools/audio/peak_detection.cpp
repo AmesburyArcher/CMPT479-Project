@@ -106,7 +106,7 @@ protected:
         Value * nextBlk = b.CreateAdd(blockOffsetPhi, b.getSize(1));
         blockOffsetPhi->addIncoming(nextBlk, combineLoop);
 
-        maxVectorPhi->addIncoming(newMax, combineDone);
+        maxVectorPhi->addIncoming(newMax, combineLoop);
         Value * moreToDo = b.CreateICmpNE(nextBlk, numOfBlocks);
         b.CreateCondBr(moreToDo, combineLoop, combineDone);
 
