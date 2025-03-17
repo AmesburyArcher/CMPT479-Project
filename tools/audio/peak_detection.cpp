@@ -100,6 +100,7 @@ protected:
             // Value * absBytepack = b.simd_abs(8, bytepack1);  // this operation should return absolute values
             // newMax = b.CreateUMax(absBytepack, newMax);
             Value * bytepack1 = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i), blockOffsetPhi);
+            bytepack1 = b.CreateBitCast(bytepack1, newMax->getType());
             newMax = b.CreateUMax(bytepack1, newMax);
         }
         Value * nextBlk = b.CreateAdd(blockOffsetPhi, b.getSize(1));
