@@ -42,13 +42,6 @@ using namespace audio;
 static cl::OptionCategory PeakDetectionOptions("Peak Detection Options", "Peak detection control options.");
 static cl::opt<std::string> inputFile(cl::Positional, cl::desc("<input file>"), cl::Required, cl::cat(PeakDetectionOptions));
 
-// TODO Changed peak detection kernel to the code below, should be nearly complete,
-// processing byte stream rather than bit streams. Use this as a foundation and changes are probably needed but is solid basis.
-// There is still some pseudocode in spots that need to be replaced
-// Gonna have to deal with absolute values because .wav file can have negative values, could probably also track global min from the samples and then
-// compare the abs(max) and abs(min) to see which is bigger to simplify logic
-
-
 class PeakDetectionKernel final : public MultiBlockKernel {
 public:
     PeakDetectionKernel(LLVMTypeSystemInterface & b,
@@ -96,12 +89,9 @@ protected:
 
         Value * newMax = maxVectorPhi;
         for (unsigned i = 0; i < 8; i++) {
-            // Value * bytepack1 = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i), blockOffsetPhi);
-            // Value * absBytepack = b.simd_abs(8, bytepack1);  // this operation should return absolute values
-            // newMax = b.CreateUMax(absBytepack, newMax);
             Value * bytepack1 = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i), blockOffsetPhi);
             bytepack1 = b.CreateBitCast(bytepack1, newMax->getType());
-            newMax = b.CreateUMax(bytepack1, newMax);
+            newMax = bitsPerSample == 8 ? b.CreateUMax(bytepack1, newMax) : b.CreateSMax(bytepack1, newMax);
         }
         Value * nextBlk = b.CreateAdd(blockOffsetPhi, b.getSize(1));
         blockOffsetPhi->addIncoming(nextBlk, combineLoop);
@@ -119,7 +109,7 @@ protected:
         Value * max5 = b.simd_umax(8, b.mvmd_srli(8, newMax, 8), max4);
 
         // for extracting the highest bit
-        Value * maxToStore = b.CreateExtractElement(max5, b.getInt32(15)); //--------changed this
+        Value * maxToStore = b.CreateExtractElement(max5, b.getInt32(15));
         b.setScalarField("peakAmplitude", maxToStore);
     }
 
@@ -137,8 +127,6 @@ PipelineFn generatePipeline(CPUDriver & pxDriver, const unsigned int &bitsPerSam
         Input<int32_t>("inputFileDescriptor"),
         Input<int32_t>("initialAmplitude"),
         Output<int32_t>("peakAmplitude"));
-
-        Max2Store = b.CreateZExt (maxToStore, b.getInt32Ty());
 
     Scalar * const fileDescriptor = P.getInputScalar("inputFileDescriptor");
     Scalar * peakAmplitude = P.getOutputScalar("peakAmplitude");
@@ -196,6 +184,26 @@ int main(int argc, char *argv[])
         close(fd);
         return 1;
     }
+
+    /*** === ADDITION: Basic C-based Peak Detection === ***/
+    uint8_t peakAmplitude_C = 0;
+    FILE *wavFile = fopen(inputFile.c_str(), "rb");
+    if (!wavFile) {
+        std::cerr << "Error: Unable to open WAV file for peak detection.\n";
+        close(fd);
+        return 1;
+    }
+
+    fseek(wavFile, 44, SEEK_SET);  // Skip WAV header
+    uint8_t sample;
+    while (fread(&sample, sizeof(uint8_t), 1, wavFile) == 1) {
+        if (sample > peakAmplitude_C) {
+            peakAmplitude_C = sample;
+        }
+    }
+    fclose(wavFile);
+
+    std::cout << "Peak Amplitude (Basic C Detection): " << (int)peakAmplitude_C << "\n";
 
     auto fn = generatePipeline(driver, bitsPerSample);
     int32_t initialAmplitude = 0;
