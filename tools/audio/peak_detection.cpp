@@ -58,11 +58,11 @@ public:
     , bitsPerSample(bitsPerSample)
     , numInputStreams(inputStreams->getNumElements())
     {
-        if (inputStreams->getNumElements() != bitsPerSample) {
-            throw std::invalid_argument(
-                "bitsPerSample: " + std::to_string(bitsPerSample) +
-                " != numInputStreams: " + std::to_string(inputStreams->getNumElements()));
-        }
+        // if (inputStreams->getNumElements() != bitsPerSample) {
+        //     throw std::invalid_argument(
+        //         "bitsPerSample: " + std::to_string(bitsPerSample) +
+        //         " != numInputStreams: " + std::to_string(inputStreams->getNumElements()));
+        // }
     }
 
 protected:
@@ -140,13 +140,13 @@ PipelineFn generatePipeline(CPUDriver & pxDriver, const unsigned int &bitsPerSam
     ParseAudioBuffer(P, fileDescriptor, 1, bitsPerSample, channels, false);
 
     // Convert serial to parallel
-    StreamSet* BasisBits = P.CreateStreamSet(bitsPerSample, 1);
-    S2P(P, bitsPerSample, monoStream, BasisBits);
-    SHOW_BIXNUM(BasisBits);
+    // StreamSet* BasisBits = P.CreateStreamSet(bitsPerSample, 1);
+    // S2P(P, bitsPerSample, monoStream, BasisBits); <----------- This was the issue, we don't need parallel bitstreams
+    // SHOW_BIXNUM(BasisBits);
 
     std::cout << "Before kernel call" << std::endl;
     // Detect peak amplitude directly into the output scalar
-    P.CreateKernelCall<PeakDetectionKernel>(bitsPerSample, BasisBits, peakAmplitude, initialAmplitude);
+    P.CreateKernelCall<PeakDetectionKernel>(bitsPerSample, monoStream, peakAmplitude, initialAmplitude);
 
     return P.compile();
 }
