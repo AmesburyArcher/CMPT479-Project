@@ -23,6 +23,7 @@
 #include <boost/intrusive/detail/math.hpp>
 #include <util/aligned_allocator.h>
 #include <kernel/pipeline/program_builder.h>
+#include <chrono>
 
 using namespace kernel;
 using namespace llvm;
@@ -58,11 +59,10 @@ public:
     , bitsPerSample(bitsPerSample)
     , numInputStreams(inputStreams->getNumElements())
     {
-        // if (inputStreams->getNumElements() != bitsPerSample) {
-        //     throw std::invalid_argument(
-        //         "bitsPerSample: " + std::to_string(bitsPerSample) +
-        //         " != numInputStreams: " + std::to_string(inputStreams->getNumElements()));
-        // }
+        if (inputStreams->getNumElements() != 1) {
+            throw std::invalid_argument(
+                "Input stream must be full byte stream");
+        }
     }
 
 protected:
@@ -71,27 +71,50 @@ protected:
         BasicBlock * combineLoop = b.CreateBasicBlock("combineLoop");
         BasicBlock * combineDone = b.CreateBasicBlock("combineDone");
         Constant * const sz_ZERO = b.getSize(0);
+
         Value * numOfBlocks = numOfStrides;
         if (getStride() != b.getBitBlockWidth()) {
             numOfBlocks = b.CreateShl(numOfStrides, b.getSize(boost::intrusive::detail::floor_log2(getStride()/b.getBitBlockWidth())));
         }
 
         Value * initialMax = b.getScalarField("initialAmplitude");
-        Value * splatMax = b.simd_fill(8, initialMax);
+        Value * splatMax = b.simd_fill(bitsPerSample, initialMax);
 
         b.CreateBr(combineLoop);
 
         b.SetInsertPoint(combineLoop);
         PHINode * blockOffsetPhi = b.CreatePHI(b.getSizeTy(), 2);
         blockOffsetPhi->addIncoming(sz_ZERO, entry);
-        PHINode * maxVectorPhi = b.CreatePHI(b.fwVectorType(8), 2);
+        PHINode * maxVectorPhi = b.CreatePHI(b.fwVectorType(bitsPerSample), 2);
         maxVectorPhi->addIncoming(splatMax, entry);
 
         Value * newMax = maxVectorPhi;
-        for (unsigned i = 0; i < 8; i++) {
-            Value * bytepack1 = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i), blockOffsetPhi);
-            bytepack1 = b.CreateBitCast(bytepack1, newMax->getType());
-            newMax = bitsPerSample == 8 ? b.CreateUMax(bytepack1, newMax) : b.CreateSMax(bytepack1, newMax);
+        if (bitsPerSample == 8) {
+            // For 8-bit samples, process all 8 byte packs
+            for (unsigned i = 0; i < 8; i++) {
+                Value * bytepack = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i), blockOffsetPhi);
+                Value * samples = b.CreateBitCast(bytepack, b.fwVectorType(8));
+                newMax = b.CreateUMax(samples, newMax);
+            }
+        } else {
+            // For 16-bit samples, process 4 pairs of byte packs
+            for (unsigned i = 0; i < 4; i++) {
+                Value * bytepack1 = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i*2), blockOffsetPhi);
+                Value * bytepack2 = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i*2+1), blockOffsetPhi);
+
+                Value * combined = b.CreateOr(b.CreateShl(bytepack2, 8), bytepack1);
+
+                Value * samples = b.CreateBitCast(combined, b.fwVectorType(16));
+
+                // Get absolute value for signed samples
+                Value * absSamples = b.CreateSelect(
+                    b.CreateICmpSLT(samples, b.getInt16(0)),
+                    b.CreateNeg(samples),
+                    samples
+                );
+
+                newMax = b.CreateUMax(absSamples, newMax);
+            }
         }
         Value * nextBlk = b.CreateAdd(blockOffsetPhi, b.getSize(1));
         blockOffsetPhi->addIncoming(nextBlk, combineLoop);
@@ -102,14 +125,15 @@ protected:
 
         b.SetInsertPoint(combineDone);
 
-        // now newMax needs a horizontal max reduction
-        Value * max2 = b.simd_umax(8, b.mvmd_srli(8, newMax, 1), newMax);
-        Value * max3 = b.simd_umax(8, b.mvmd_srli(8, newMax, 2), max2);
-        Value * max4 = b.simd_umax(8, b.mvmd_srli(8, newMax, 4), max3);
-        Value * max5 = b.simd_umax(8, b.mvmd_srli(8, newMax, 8), max4);
+        // Horizontal max reduction for newMax
+        Value * max2 = bitsPerSample == 8 ? b.simd_umax(8, b.mvmd_srli(8, newMax, 1), newMax) : b.simd_umax(16, b.mvmd_srli(16, newMax, 1), newMax);
+        Value * max3 = bitsPerSample == 8 ? b.simd_umax(8, b.mvmd_srli(8, newMax, 2), max2) : b.simd_umax(16, b.mvmd_srli(16, newMax, 2), max2);
+        Value * max4 = bitsPerSample == 8 ? b.simd_umax(8, b.mvmd_srli(8, newMax, 4), max3) : b.simd_umax(16, b.mvmd_srli(16, newMax, 4), max3);
+        Value * max5 = bitsPerSample == 8 ? b.simd_umax(8, b.mvmd_srli(8, newMax, 8), max4) : max4;
 
-        // for extracting the highest bit
-        Value * maxToStore = b.CreateExtractElement(max5, b.getInt32(15));
+        Value * maxToStore = b.CreateExtractElement(max5, b.getInt32(bitsPerSample == 8 ? 15 : 7));
+
+        // Store the final value
         b.setScalarField("peakAmplitude", maxToStore);
     }
 
@@ -139,10 +163,6 @@ PipelineFn generatePipeline(CPUDriver & pxDriver, const unsigned int &bitsPerSam
     std::vector<StreamSet *> channels = {monoStream};
     ParseAudioBuffer(P, fileDescriptor, 1, bitsPerSample, channels, false);
 
-    // Convert serial to parallel
-    // StreamSet* BasisBits = P.CreateStreamSet(bitsPerSample, 1);
-    // S2P(P, bitsPerSample, monoStream, BasisBits); <----------- This was the issue, we don't need parallel bitstreams
-    // SHOW_BIXNUM(BasisBits);
 
     std::cout << "Before kernel call" << std::endl;
     // Detect peak amplitude directly into the output scalar
@@ -163,7 +183,6 @@ int main(int argc, char *argv[])
     }
 
     unsigned int sampleRate = 0, numChannels = 1, bitsPerSample = 8, numSamples = 0;
-    bool isWav = true;
     try {
         readWAVHeader(fd, numChannels, sampleRate, bitsPerSample, numSamples);
         std::cout << "WAV File Info: " << numChannels << " channels, "
@@ -186,7 +205,7 @@ int main(int argc, char *argv[])
     }
 
     /*** === ADDITION: Basic C-based Peak Detection === ***/
-    uint8_t peakAmplitude_C = 0;
+    auto c_start = std::chrono::high_resolution_clock::now();
     FILE *wavFile = fopen(inputFile.c_str(), "rb");
     if (!wavFile) {
         std::cerr << "Error: Unable to open WAV file for peak detection.\n";
@@ -195,26 +214,47 @@ int main(int argc, char *argv[])
     }
 
     fseek(wavFile, 44, SEEK_SET);  // Skip WAV header
-    uint8_t sample;
-    while (fread(&sample, sizeof(uint8_t), 1, wavFile) == 1) {
-        if (sample > peakAmplitude_C) {
-            peakAmplitude_C = sample;
+    uint8_t sample_8t;
+    int16_t sample_16t;
+    uint32_t peakAmplitude_C = 0;
+
+    if (bitsPerSample == 8) {
+        while (fread(&sample_8t, sizeof(uint8_t), 1, wavFile) == 1) {
+            if (sample_8t > peakAmplitude_C) {
+                peakAmplitude_C = sample_8t;
+            }
+        }
+    } else if (bitsPerSample == 16) {
+        while (fread(&sample_16t, sizeof(int16_t), 1, wavFile) == 1) {
+            if (abs(sample_16t) > peakAmplitude_C) {
+                peakAmplitude_C = abs(sample_16t);
+            }
         }
     }
     fclose(wavFile);
 
+    auto c_end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> c_duration = c_end - c_start;
+
     std::cout << "Peak Amplitude (Basic C Detection): " << (int)peakAmplitude_C << "\n";
+    std::cout << "C implementation time: " << c_duration.count() << " ms\n\n";
+
+    auto simd_start = std::chrono::high_resolution_clock::now();
 
     auto fn = generatePipeline(driver, bitsPerSample);
     int32_t initialAmplitude = 0;
     int32_t peakAmplitude = 0;
 
     peakAmplitude = fn(fd, initialAmplitude);
+
+    auto simd_end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> simd_duration = simd_end - simd_start;
     
     // Calculate maximum possible amplitude based on bits per sample
-    int32_t maxPossibleAmplitude = (1 << (bitsPerSample - 1)) - 1;
+    int32_t maxPossibleAmplitude = bitsPerSample == 8 ? (1 << bitsPerSample) : (1 << (bitsPerSample - 1)) - 1;
 
-    std::cout << "Peak amplitude: " << peakAmplitude << "\n";
+    std::cout << "(SIMD) implementation time: " << simd_duration.count() << " ms\n";
+    std::cout << "(SIMD) Peak amplitude: " << peakAmplitude << "\n";
     std::cout << "Maximum possible amplitude: " << maxPossibleAmplitude << "\n";
 
     double normalizationFactor = 1.0;
