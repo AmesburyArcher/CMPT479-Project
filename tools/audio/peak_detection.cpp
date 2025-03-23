@@ -126,14 +126,39 @@ protected:
         b.SetInsertPoint(combineDone);
 
         // Horizontal max reduction for newMax
-        Value * max2 = bitsPerSample == 8 ? b.simd_umax(8, b.mvmd_srli(8, newMax, 1), newMax) : b.simd_umax(16, b.mvmd_srli(16, newMax, 1), newMax);
-        Value * max3 = bitsPerSample == 8 ? b.simd_umax(8, b.mvmd_srli(8, newMax, 2), max2) : b.simd_umax(16, b.mvmd_srli(16, newMax, 2), max2);
-        Value * max4 = bitsPerSample == 8 ? b.simd_umax(8, b.mvmd_srli(8, newMax, 4), max3) : b.simd_umax(16, b.mvmd_srli(16, newMax, 4), max3);
-        Value * max5 = bitsPerSample == 8 ? b.simd_umax(8, b.mvmd_srli(8, newMax, 8), max4) : max4;
+        // Value * max2 = bitsPerSample == 8 ? b.simd_umax(8, b.mvmd_srli(8, newMax, 1), newMax) : b.simd_umax(16, b.mvmd_srli(16, newMax, 1), newMax);
+        // Value * max3 = bitsPerSample == 8 ? b.simd_umax(8, b.mvmd_srli(8, newMax, 2), max2) : b.simd_umax(16, b.mvmd_srli(16, newMax, 2), max2);
+        // Value * max4 = bitsPerSample == 8 ? b.simd_umax(8, b.mvmd_srli(8, newMax, 4), max3) : b.simd_umax(16, b.mvmd_srli(16, newMax, 4), max3);
+        // Value * max5 = bitsPerSample == 8 ? b.simd_umax(8, b.mvmd_srli(8, newMax, 8), max4) : max4;
 
-        Value * maxToStore = b.CreateExtractElement(max5, b.getInt32(bitsPerSample == 8 ? 15 : 7));
+        // Value * maxToStore = b.CreateExtractElement(max5, b.getInt32(bitsPerSample == 8 ? 15 : 7));
 
         // Store the final value
+        Value * currentMax = newMax;
+        unsigned lanes = b.getBitBlockWidth() / bitsPerSample;
+        unsigned logSteps = static_cast<unsigned>(std::log2(lanes));
+
+        for (unsigned i = 0; i < logSteps; i++) {
+            unsigned shiftAmount = 1 << i;
+            Value * shifted = b.mvmd_srli(bitsPerSample, currentMax, shiftAmount);
+            currentMax = b.simd_umax(bitsPerSample, shifted, currentMax);
+            b.CallPrintRegister("max_step_" + std::to_string(i), currentMax);
+        }
+
+
+        // now newMax needs a horizontal max reduction
+        // Value * max2 = b.simd_umax(8, b.mvmd_srli(8, newMax, 1), newMax);
+        // Value * max3 = b.simd_umax(8, b.mvmd_srli(8, newMax, 2), max2);
+        // Value * max4 = b.simd_umax(8, b.mvmd_srli(8, newMax, 4), max3);
+        // Value * max5 = b.simd_umax(8, b.mvmd_srli(8, newMax, 8), max4);
+
+        // for extracting the highest bit
+        // Value * maxToStore = b.CreateExtractElement(max5, b.getInt32(15));
+        Value * maxToStoreRaw = b.CreateExtractElement(currentMax, b.getInt32(0));
+
+        Value * maxToStore = b.CreateZExt(maxToStoreRaw, b.getInt32Ty());
+
+
         b.setScalarField("peakAmplitude", maxToStore);
     }
 
