@@ -142,7 +142,7 @@ protected:
             unsigned shiftAmount = 1 << i;
             Value * shifted = b.mvmd_srli(bitsPerSample, currentMax, shiftAmount);
             currentMax = b.simd_umax(bitsPerSample, shifted, currentMax);
-            b.CallPrintRegister("max_step_" + std::to_string(i), currentMax);
+            // b.CallPrintRegister("max_step_" + std::to_string(i), currentMax);
         }
 
 
