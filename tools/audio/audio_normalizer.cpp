@@ -15,7 +15,7 @@
 #include <string>
 #include <toolchain/toolchain.h>
 #include <fcntl.h>
-#include <iostream>
+#include <iostream> 
 #include <kernel/pipeline/driver/cpudriver.h>
 #include <audio/audio.h>
 #include <audio/stream_manipulation.h>
@@ -53,6 +53,7 @@ PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &
     StreamSet * OutputBytes = P.getOutputStreamSet("OutputBytes");
     Scalar * const fileDescriptor = P.getInputScalar("inputFileDecriptor");
 
+
     // Create streams for each channel
     std::vector<StreamSet *> ChannelSampleStreams(numChannels);
     for (unsigned i = 0; i < numChannels; ++i) {
@@ -71,9 +72,12 @@ PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &
         S2P(P, bitsPerSample, ChannelSampleStreams[i], BasisBits);
         SHOW_BIXNUM(BasisBits);
 
+        Scalar * initialAmplitude = P.CreateConstant(P.getBuilder()->getInt32Ty(), 0);
+        Scalar * peakAmplitude = audio::CreatePeakDetectionKernel(P, BasisBits, initialAmplitude, bitsPerSample);
+
         // Normalize the audio using normalization kernel
         StreamSet *NormalizedBasisBits = P.CreateStreamSet(bitsPerSample);
-        P.CreateKernelCall<NormalizePabloKernel>(bitsPerSample, BasisBits, NormalizedBasisBits);
+        P.CreateKernelCall<NormalizePabloKernel>(bitsPerSample, BasisBits, peakAmplitude, NormalizedBasisBits);
         SHOW_BIXNUM(NormalizedBasisBits);
 
         // Convert back to serial
