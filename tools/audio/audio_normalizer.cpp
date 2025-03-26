@@ -23,6 +23,8 @@
 #include <util/aligned_allocator.h>
 #include <kernel/pipeline/program_builder.h>
 
+
+
 using namespace kernel;
 using namespace llvm;
 using namespace codegen;
@@ -45,7 +47,7 @@ static cl::opt<std::string> outputFile("o", cl::desc("Specify a file to save the
 typedef void (*PipelineFunctionType)(StreamSetPtr & ss_buf, int32_t fd);
 
 
-PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &numChannels, const unsigned int &bitsPerSample) {
+PipelineFunctionType generateNormalizationPipeline(CPUDriver & pxDriver, const unsigned int &numChannels, const unsigned int &bitsPerSample, int32_t peakAmplitude) {
     auto P = CreatePipeline(pxDriver,
         Output<streamset_t>("OutputBytes", 1, bitsPerSample * numChannels, ReturnedBuffer(1)),
         Input<int32_t>("inputFileDecriptor"));
@@ -72,8 +74,8 @@ PipelineFunctionType generatePipeline(CPUDriver & pxDriver, const unsigned int &
         S2P(P, bitsPerSample, ChannelSampleStreams[i], BasisBits);
         SHOW_BIXNUM(BasisBits);
 
-        Scalar * initialAmplitude = P.CreateConstant(P.getBuilder()->getInt32Ty(), 0);
-        Scalar * peakAmplitude = audio::CreatePeakDetectionKernel(P, BasisBits, initialAmplitude, bitsPerSample);
+        // TODO: need to pass the peak Amplitue here somehow
+
 
         // Normalize the audio using normalization kernel
         StreamSet *NormalizedBasisBits = P.CreateStreamSet(bitsPerSample);
@@ -113,7 +115,15 @@ int main(int argc, char *argv[])
         isWav = false;
     }
 
-    auto fn = generatePipeline(driver, numChannels, bitsPerSample);
+    auto fn_peak = generatePipeline(driver, bitsPerSample); // this is for the pipeline in peak_detection    
+    int32_t initialAmplitude = 0;
+    int32_t peakAmplitude = fn_peak(fd, initialAmplitude);
+    std::cout << "(SIMD) Peak amplitude: " << peakAmplitude << "\n";
+
+    // resetting the offset for the normalization process
+    lseek(fd, 44, SEEK_SET);
+
+    auto fn = generateNormalizationPipeline(driver, numChannels, bitsPerSample, peakAmplitude);
     StreamSetPtr wavStream;
 
 
