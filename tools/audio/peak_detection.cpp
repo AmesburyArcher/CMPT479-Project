@@ -29,6 +29,10 @@ using namespace kernel;
 using namespace llvm;
 using namespace codegen;
 using namespace audio;
+namespace audio {
+    kernel::Scalar * CreatePeakDetectionKernel(kernel::PipelineBuilder & P, kernel::StreamSet * inputStream, kernel::Scalar * initialAmplitude, unsigned bitsPerSample);
+}
+
 
 #define SHOW_STREAM(name)           \
     if (codegen::EnableIllustrator) \
@@ -43,6 +47,7 @@ using namespace audio;
 static cl::OptionCategory PeakDetectionOptions("Peak Detection Options", "Peak detection control options.");
 static cl::opt<std::string> inputFile(cl::Positional, cl::desc("<input file>"), cl::Required, cl::cat(PeakDetectionOptions));
 
+    
 class PeakDetectionKernel final : public MultiBlockKernel {
 public:
     PeakDetectionKernel(LLVMTypeSystemInterface & b,
@@ -64,6 +69,7 @@ public:
                 "Input stream must be full byte stream");
         }
     }
+
 
 protected:
     void generateMultiBlockLogic(KernelBuilder & b, llvm::Value * const numOfStrides) override {
@@ -141,6 +147,7 @@ protected:
             // b.CallPrintRegister("max_step_" + std::to_string(i), currentMax);
         }
 
+        // Extracting the max element
         Value* maxToStoreRaw = b.CreateExtractElement(currentMax, b.getInt32(0));
 
         Value * maxToStore = b.CreateZExt(maxToStoreRaw, b.getInt32Ty());

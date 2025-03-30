@@ -115,6 +115,7 @@ namespace audio
                 LLVMTypeSystemInterface & b,
                 const unsigned int bitsPerSample,
                 StreamSet * const inputStreams,
+                Scalar * peakAmplitude,
                 StreamSet * const outputStreams
             );
         protected:
@@ -138,4 +139,6 @@ namespace audio
         unsigned int numFirstInputStreams;
         unsigned int numSecondInputStreams;
     };
+
+
 }

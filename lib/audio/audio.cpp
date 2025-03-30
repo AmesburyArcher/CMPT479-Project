@@ -459,9 +459,10 @@ namespace audio
     }
 
     NormalizePabloKernel::NormalizePabloKernel(LLVMTypeSystemInterface & b, const unsigned int bitsPerSample,
-                         StreamSet * const inputStreams, StreamSet * const outputStreams)
+                         StreamSet * const inputStreams, Scalar * peakAmplitude, StreamSet * const outputStreams)
         : PabloKernel(b, "NormalizePabloKernel",
                       {Binding{"inputStreams", inputStreams}},
+                      {Binding{"peakAmplitude", peakAmplitude}},
                       {Binding{"outputStreams", outputStreams}})
         , bitsPerSample(bitsPerSample)
         , numInputStreams(inputStreams->getNumElements())
