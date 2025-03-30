@@ -115,7 +115,7 @@ namespace audio
                 LLVMTypeSystemInterface & b,
                 const unsigned int bitsPerSample,
                 StreamSet * const inputStreams,
-                Scalar * peakAmplitude,
+                double amplificationFactor,
                 StreamSet * const outputStreams
             );
         protected:
@@ -124,6 +124,7 @@ namespace audio
         private:
             unsigned int bitsPerSample;
             unsigned int numInputStreams;
+            double amplificationFactor;
     };
 
     class ConcatenateKernel final : public PabloKernel {

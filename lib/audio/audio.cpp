@@ -459,13 +459,14 @@ namespace audio
     }
 
     NormalizePabloKernel::NormalizePabloKernel(LLVMTypeSystemInterface & b, const unsigned int bitsPerSample,
-                         StreamSet * const inputStreams, Scalar * peakAmplitude, StreamSet * const outputStreams)
+                         StreamSet * const inputStreams, double amplificationFactor, StreamSet * const outputStreams)
         : PabloKernel(b, "NormalizePabloKernel",
                       {Binding{"inputStreams", inputStreams}},
-                      {Binding{"peakAmplitude", peakAmplitude}},
-                      {Binding{"outputStreams", outputStreams}})
+                      {Binding{"outputStreams", outputStreams}}
+)
         , bitsPerSample(bitsPerSample)
-        , numInputStreams(inputStreams->getNumElements())
+        , numInputStreams(inputStreams->getNumElements()),
+            amplificationFactor(amplificationFactor)
     {
         if (inputStreams->getNumElements() != outputStreams->getNumElements()) {
             throw std::invalid_argument(
@@ -479,52 +480,59 @@ namespace audio
         BixNumCompiler bnc(pb);
         std::vector<PabloAST *> inputStreams = getInputStreamSet("inputStreams");
 
-        // For testing, using a hardcoded amplification factor of 2
-        const unsigned amplificationFactor = 2;
+        constexpr unsigned SCALE_BITS = 16;  // Using 16-bit fixed point precision
 
-        // Extend the bit width to accommodate multiplication
+        // Extend the bit width to prevent overflow
+        int fixedAmplificationFactor = static_cast<int>(amplificationFactor * (1 << SCALE_BITS));
+
+        // Extend the bit width to prevent overflow
         std::vector<PabloAST *> extendedStreams = bnc.SignExtend(inputStreams, bitsPerSample + 1);
 
-        // Multiply by hardcoded factor
-        std::vector<PabloAST *> amplifiedStreams = bnc.MulModular(extendedStreams, amplificationFactor);
+        // Multiply by fixed-point integer factor
+        std::vector<PabloAST *> amplifiedStreams = bnc.MulModular(extendedStreams, fixedAmplificationFactor);
 
-        // Handle negative numbers
-        std::vector<PabloAST *> flipStreams(amplifiedStreams.size());
+        // Approximate right shift using createAdvance (scales down by 2^SCALE_BITS)
+        std::vector<PabloAST *> normalizedStreams(amplifiedStreams.size());
         for (unsigned i = 0; i < amplifiedStreams.size(); ++i) {
-            flipStreams[i] = pb.createNot(amplifiedStreams[i]);
+            normalizedStreams[i] = pb.createAdvance(amplifiedStreams[i], SCALE_BITS);
         }
 
-        // Convert back to two's complement
-        std::vector<PabloAST *> negativeStreams = bnc.AddModular(flipStreams, 1);
+    // Handle negative numbers using two’s complement
+    std::vector<PabloAST *> flipStreams(normalizedStreams.size());
+    for (unsigned i = 0; i < normalizedStreams.size(); ++i) {
+        flipStreams[i] = pb.createNot(normalizedStreams[i]);
+    }
+    std::vector<PabloAST *> negativeStreams = bnc.AddModular(flipStreams, 1);
 
-        // Select between positive and negative based on sign bit
-        std::vector<PabloAST *> normalizedStreams = bnc.Select(
-            inputStreams[bitsPerSample-1] /*sign bit*/,
-            negativeStreams,
-            amplifiedStreams
-        );
+    // Select positive or negative based on sign bit
+    std::vector<PabloAST *> finalStreams = bnc.Select(
+        inputStreams[bitsPerSample - 1] /*sign bit*/,
+        negativeStreams,
+        normalizedStreams
+    );
 
-        // Prevent overflow
-        PabloAST *overflow = pb.createZeroes();
-        for (int i = bitsPerSample - 1; i < (int)normalizedStreams.size() - 1; ++i) {
-            overflow = pb.createOr(overflow, normalizedStreams[i]);
-        }
+    // Prevent overflow
+    PabloAST *overflow = pb.createZeroes();
+    for (int i = bitsPerSample - 1; i < static_cast<int>(finalStreams.size()) - 1; ++i) {
+        overflow = pb.createOr(overflow, finalStreams[i]);
+    }
 
-        // Handle positive and negative overflow separately
-        PabloAST *is_negative_overflow = pb.createAnd(inputStreams[bitsPerSample-1], overflow);
-        PabloAST *is_positive_overflow = pb.createAnd(pb.createNot(inputStreams[bitsPerSample-1]), overflow);
+    // Detect positive and negative overflow
+    PabloAST *is_negative_overflow = pb.createAnd(inputStreams[bitsPerSample - 1], overflow);
+    PabloAST *is_positive_overflow = pb.createAnd(pb.createNot(inputStreams[bitsPerSample - 1]), overflow);
 
-        // Clamp values
-        std::vector<PabloAST *> outputStreams(bitsPerSample);
-        for (int i = 0; i < (int)bitsPerSample - 1; ++i) {
-            outputStreams[i] = pb.createSel(is_negative_overflow, pb.createZeroes(), normalizedStreams[i]);
-            outputStreams[i] = pb.createSel(is_positive_overflow, pb.createOnes(), outputStreams[i]);
-        }
+    // Clamp values to avoid overflow
+    std::vector<PabloAST *> outputStreams(bitsPerSample);
+    for (int i = 0; i < static_cast<int>(bitsPerSample) - 1; ++i) {
+        outputStreams[i] = pb.createSel(is_negative_overflow, pb.createZeroes(), finalStreams[i]);
+        outputStreams[i] = pb.createSel(is_positive_overflow, pb.createOnes(), outputStreams[i]);
+    }
 
-        // Preserve sign bit
-        outputStreams[bitsPerSample-1] = inputStreams[bitsPerSample-1];
+    // Preserve sign bit
+    outputStreams[bitsPerSample - 1] = inputStreams[bitsPerSample - 1];
 
-        writeOutputStreamSet("outputStreams", outputStreams);
+    // Write output
+    writeOutputStreamSet("outputStreams", outputStreams);
     }
 
     AmplifyPabloKernel::AmplifyPabloKernel(LLVMTypeSystemInterface &b, const unsigned int bitsPerSample, StreamSet *const inputStreams, const unsigned int &factor, StreamSet *const outputStreams)
