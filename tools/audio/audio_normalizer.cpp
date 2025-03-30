@@ -248,11 +248,11 @@ int main(int argc, char *argv[])
                  << numSamples << " samples\n";
 
         // For now, we only handle mono files
-        if (numChannels != 1) {
-            llvm::errs() << "Error: This tool only works with mono (1-channel) WAV files.\n";
-            close(fd);
-            return 1;
-        }
+        // if (numChannels != 1) {
+        //     llvm::errs() << "Error: This tool only works with mono (1-channel) WAV files.\n";
+        //     close(fd);
+        //     return 1;
+        // }
 
         lseek(fd, 44, SEEK_SET);
     } catch (const std::exception &e) {
