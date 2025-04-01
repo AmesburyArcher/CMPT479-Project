@@ -89,7 +89,7 @@ PipelineFunctionType generateNormalizationPipeline(CPUDriver & pxDriver, const u
         SHOW_BYTES(NormalizedSampleStreams[i]);
     }
 
-    if (numChannels == 2) {
+    if (numChannels ==2) {
         P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], NormalizedSampleStreams[1], OutputBytes);
     }
     
@@ -146,9 +146,9 @@ protected:
         Value * newMax = maxVectorPhi;
         if (bitsPerSample == 8) {
             // For 8-bit samples, process all 8 byte packs
-            for (unsigned i = 0; i < 8; i++) {
+            for (unsigned i = 0; i < bitsPerSample; i++) {
                 Value * bytepack = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i), blockOffsetPhi);
-                Value * samples = b.CreateBitCast(bytepack, b.fwVectorType(8));
+                Value * samples = b.CreateBitCast(bytepack, b.fwVectorType(bitsPerSample));
                 newMax = b.CreateUMax(samples, newMax);
             }
         } else {
