@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # Define parameters
-OUTPUT_FILE="test.wav"
+OUTPUT_FILE="ideal_test.wav"
 SAMPLE_RATE=44100
-DURATION=1  # in seconds
-AMPLITUDE=127  # Exact peak amplitude in unsigned 8-bit PCM (0-255 range)
+DURATION=5  # in seconds
+AMPLITUDE=0.2  # Set amplitude to a reasonable level for easy normalization detection
 
-# Generate a square wave with exact amplitude (forcing known peak values)
-sox -b 8 -c 1 -r $SAMPLE_RATE -n $OUTPUT_FILE synth $DURATION square 440 vol $(bc -l <<< "$AMPLITUDE/255")
+# Generate an ideal mono 8-bit PCM square wave
+sox -b 8 -c 1 -r $SAMPLE_RATE -n $OUTPUT_FILE synth $DURATION square 440 vol $AMPLITUDE
 
 # Verify the generated file
 soxi $OUTPUT_FILE

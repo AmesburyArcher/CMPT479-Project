@@ -23,6 +23,7 @@
 #include <boost/intrusive/detail/math.hpp>
 #include <util/aligned_allocator.h>
 #include <kernel/pipeline/program_builder.h>
+#include <cmath>
 
 
 
@@ -44,6 +45,16 @@ using namespace audio;
 static cl::OptionCategory DemoOptions("Demo Options", "Demo control options.");
 static cl::opt<std::string> inputFile(cl::Positional, cl::desc("<input file>"), cl::Required, cl::cat(DemoOptions));
 static cl::opt<std::string> outputFile("o", cl::desc("Specify a file to save the modified .wav file."), cl::cat(DemoOptions));
+
+int countFractionalDigits(double value) {
+    std::string str = std::to_string(value);
+    size_t pos = str.find('.');
+    if (pos == std::string::npos) return 0;
+
+    str.erase(str.find_last_not_of('0') + 1, std::string::npos);
+
+    return str.length() - pos - 1;
+}
 
 typedef void (*PipelineFunctionType)(StreamSetPtr & ss_buf, int32_t fd);
 
@@ -67,6 +78,12 @@ PipelineFunctionType generateNormalizationPipeline(CPUDriver & pxDriver, const u
 
     std::vector<StreamSet *> NormalizedSampleStreams(numChannels);
 
+    std::cout << "Normalization factor: " << normalizationFactor << std::endl;
+
+    int precision = countFractionalDigits(normalizationFactor);
+
+    std::cout << "Precision: " << precision << std::endl;
+
     // Process each channel
     for (unsigned i = 0; i < numChannels; ++i) {
         // Convert serial to parallel
@@ -76,7 +93,7 @@ PipelineFunctionType generateNormalizationPipeline(CPUDriver & pxDriver, const u
 
         // Normalize the audio using normalization kernel
         StreamSet *NormalizedBasisBits = P.CreateStreamSet(bitsPerSample);
-        P.CreateKernelCall<NormalizePabloKernel>(bitsPerSample, BasisBits, normalizationFactor, NormalizedBasisBits);
+        P.CreateKernelCall<NormalizePabloKernel>(bitsPerSample, BasisBits, normalizationFactor, precision, NormalizedBasisBits);
         SHOW_BIXNUM(NormalizedBasisBits);
 
         // Convert back to serial
@@ -153,17 +170,26 @@ protected:
             }
         } else {
 
-            // For 16-bit samples, each sample is two bytes.
-            for (unsigned i = 0; i < bitsPerSample; i++) {
-                Value * wordpack = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i), blockOffsetPhi);
-                Value * samples = b.CreateBitCast(wordpack, b.fwVectorType(bitsPerSample));
+            for (unsigned i = 0; i < 4; i++) {
+                Value * bytepack1 = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i*2), blockOffsetPhi);
+                Value * bytepack2 = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i*2+1), blockOffsetPhi);
 
-                Value * zeroVec = b.simd_fill(bitsPerSample, b.getInt16(0)); //creating 16 lanes of 0s
+                // Value * combined = b.CreateOr(b.CreateShl(bytepack2, 8), bytepack1);
+                // Value * combined = b.CreateOr(b.CreateShl(bytepack2, b.getInt64(8)), bytepack1); // shifting by 8 btis now
+                Value * shiftAmount = b.simd_fill(64, b.getInt64(8));
+
+
+                Value * shifted = b.CreateShl(bytepack2, shiftAmount);
+                Value * combined = b.CreateOr(shifted, bytepack1);
+
+                Value * samples = b.CreateBitCast(combined, b.fwVectorType(16));
+
+                // Get absolute value for signed samples
+                Value * zeroVec = b.simd_fill(16, b.getInt16(0)); //creating 16 lanes of 0s
                 Value * isNegative = b.CreateICmpSLT(samples, zeroVec); //returns 1 if true
                 Value * absSamples = b.CreateSelect(isNegative, b.CreateNeg(samples), samples);
 
                 newMax = b.CreateUMax(absSamples, newMax);
-
             }
 
         }

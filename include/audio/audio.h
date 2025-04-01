@@ -116,6 +116,7 @@ namespace audio
                 const unsigned int bitsPerSample,
                 StreamSet * const inputStreams,
                 double amplificationFactor,
+                int precision,
                 StreamSet * const outputStreams
             );
         protected:
@@ -125,6 +126,7 @@ namespace audio
             unsigned int bitsPerSample;
             unsigned int numInputStreams;
             double amplificationFactor;
+            int precision;
     };
 
     class ConcatenateKernel final : public PabloKernel {
