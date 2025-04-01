@@ -458,9 +458,9 @@ namespace audio
         pb.createAssign(pb.createExtract(result, pb.getInteger(0)), exceedThreshold);
     }
 
-    NormalizePabloKernel::NormalizePabloKernel(LLVMTypeSystemInterface & b, const unsigned int bitsPerSample,
+    NormalizePabloKernel::NormalizePabloKernel(LLVMTypeSystemInterface & b, const unsigned int bitsPerSample, 
                          StreamSet * const inputStreams, double amplificationFactor, int precision, StreamSet * const outputStreams)
-        : PabloKernel(b, "NormalizePabloKernel",
+        : PabloKernel(b, "NormalizePabloKernel" + std::to_string(bitsPerSample),
                       {Binding{"inputStreams", inputStreams}},
                       {Binding{"outputStreams", outputStreams}}
 )
