@@ -81,12 +81,18 @@ PipelineFunctionType generateNormalizationPipeline(CPUDriver & pxDriver, const u
 
         // Convert back to serial
         NormalizedSampleStreams[i] = P.CreateStreamSet(1, bitsPerSample);
-        P2S(P, NormalizedBasisBits, NormalizedSampleStreams[i]);
+        if ( numChannels == 1){
+            P2S(P, NormalizedBasisBits, OutputBytes);
+        } else {
+            P2S(P, NormalizedBasisBits, NormalizedSampleStreams[i]);
+        }
         SHOW_BYTES(NormalizedSampleStreams[i]);
     }
 
-    P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], NormalizedSampleStreams[1], OutputBytes);
-
+    if (numChannels == 2) {
+        P.CreateKernelCall<MergeKernel>(bitsPerSample, NormalizedSampleStreams[0], NormalizedSampleStreams[1], OutputBytes);
+    }
+    
     SHOW_BYTES(OutputBytes);
     return P.compile();
 }

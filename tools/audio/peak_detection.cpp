@@ -97,14 +97,15 @@ protected:
         Value * newMax = maxVectorPhi;
         if (bitsPerSample == 8) {
             // For 8-bit samples, process all 8 byte packs
-            for (unsigned i = 0; i < 8; i++) {
+            for (unsigned i = 0; i < bitsPerSample; i++) {
                 Value * bytepack = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i), blockOffsetPhi);
-                Value * samples = b.CreateBitCast(bytepack, b.fwVectorType(8));
+                Value * samples = b.CreateBitCast(bytepack, b.fwVectorType(bitsPerSample));
                 newMax = b.CreateUMax(samples, newMax);
             }
         } else {
-            // For 16-bit samples, process 4 pairs of byte packs
-            for (unsigned i = 0; i < 4; i++) {
+            // For 16-bit samples, each sample is two bytes.
+
+            for (unsigned i = 0; i < 16; i++) {
                 Value * bytepack1 = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i*2), blockOffsetPhi);
                 Value * bytepack2 = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i*2+1), blockOffsetPhi);
 
@@ -116,7 +117,7 @@ protected:
                 Value * shifted = b.CreateShl(bytepack2, shiftAmount);
                 Value * combined = b.CreateOr(shifted, bytepack1);
 
-                Value * samples = b.CreateBitCast(combined, b.fwVectorType(16));
+                Value * samples = b.CreateBitCast(combined, b.fwVectorType(bitsPerSample));
 
                 // Get absolute value for signed samples
                 Value * zeroVec = b.simd_fill(16, b.getInt16(0)); //creating 16 lanes of 0s
@@ -209,11 +210,11 @@ int main(int argc, char *argv[])
                  << numSamples << " samples\n";
         
         // For now, we only handle mono files
-        if (numChannels != 1) {
-            llvm::errs() << "Error: This tool only works with mono (1-channel) WAV files.\n";
-            close(fd);
-            return 1;
-        }
+        // if (numChannels != 1) {
+        //     llvm::errs() << "Error: This tool only works with mono (1-channel) WAV files.\n";
+        //     close(fd);
+        //     return 1;
+        // }
         
         lseek(fd, 44, SEEK_SET);
     } catch (const std::exception &e) {
