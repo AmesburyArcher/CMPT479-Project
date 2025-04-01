@@ -56,6 +56,24 @@ int countFractionalDigits(double value) {
     return str.length() - pos - 1;
 }
 
+void normalize_cpp(std::vector<uint8_t>& samples_8bit, uint32_t max_amplitude, uint32_t target_peak) {
+    if (max_amplitude == 0) return;
+
+    float scale = static_cast<float>(target_peak) / max_amplitude;
+    for (uint8_t& sample : samples_8bit) {
+        sample = static_cast<uint8_t>(std::round(sample * scale));
+    }
+}
+
+void normalize_cpp(std::vector<int16_t>& samples_16bit, uint32_t max_amplitude, uint32_t target_peak) {
+    if (max_amplitude == 0) return;
+
+    float scale = static_cast<float>(target_peak) / max_amplitude;
+    for (int16_t& sample : samples_16bit) {
+        sample = static_cast<int16_t>(std::round(sample * scale));
+    }
+}
+
 typedef void (*PipelineFunctionType)(StreamSetPtr & ss_buf, int32_t fd);
 
 PipelineFunctionType generateNormalizationPipeline(CPUDriver & pxDriver, const unsigned int &numChannels, const unsigned int &bitsPerSample, double normalizationFactor) {
@@ -269,55 +287,68 @@ int main(int argc, char *argv[])
                  << sampleRate << " Hz, "
                  << bitsPerSample << " bits per sample, "
                  << numSamples << " samples\n";
-
-        // For now, we only handle mono files
-        // if (numChannels != 1) {
-        //     llvm::errs() << "Error: This tool only works with mono (1-channel) WAV files.\n";
-        //     close(fd);
-        //     return 1;
-        // }
-
-        lseek(fd, 44, SEEK_SET);
     } catch (const std::exception &e) {
         llvm::errs() << "Error: " << inputFile << " is not a valid WAV file.\n";
         close(fd);
         return 1;
     }
 
+    // Calculate maximum possible amplitude based on bits per sample
+    int32_t maxPossibleAmplitude = bitsPerSample == 8 ? (1 << bitsPerSample) : (1 << (bitsPerSample - 1)) - 1;
+
     /*** === ADDITION: Basic C-based Peak Detection === ***/
     auto c_start = std::chrono::high_resolution_clock::now();
-    FILE *wavFile = fopen(inputFile.c_str(), "rb");
+    int wavFile = open(inputFile.c_str(), O_RDWR);
     if (!wavFile) {
         std::cerr << "Error: Unable to open WAV file for peak detection.\n";
-        close(fd);
         return 1;
     }
 
-    fseek(wavFile, 44, SEEK_SET);  // Skip WAV header
+    unsigned int sampleRate_c = 0, numChannels_c = 2, bitsPerSample_c = 8, numSamples_c = 0;
+    readWAVHeader(wavFile, numChannels_c, sampleRate_c, bitsPerSample_c, numSamples_c);
     uint8_t sample_8t;
     int16_t sample_16t;
+    std::vector<uint8_t> samples_8bit;
+    std::vector<int16_t> samples_16bit;
     uint32_t peakAmplitude_C = 0;
 
-    if (bitsPerSample == 8) {
-        while (fread(&sample_8t, sizeof(uint8_t), 1, wavFile) == 1) {
+    if (bitsPerSample_c == 8) {
+        while (read(wavFile, &sample_8t, sizeof(uint8_t)) == sizeof(uint8_t)) {
+            samples_8bit.push_back(sample_8t);
             if (sample_8t > peakAmplitude_C) {
                 peakAmplitude_C = sample_8t;
             }
         }
-    } else if (bitsPerSample == 16) {
-        while (fread(&sample_16t, sizeof(int16_t), 1, wavFile) == 1) {
-            if (abs(sample_16t) > peakAmplitude_C) {
-                peakAmplitude_C = abs(sample_16t);
+    } else if (bitsPerSample_c == 16) {
+        while (read(wavFile, &sample_16t, sizeof(int16_t)) == sizeof(int16_t)) {
+            samples_16bit.push_back(sample_16t);
+            if (std::abs(sample_16t) > peakAmplitude_C) {
+                peakAmplitude_C = std::abs(sample_16t);
             }
         }
     }
-    fclose(wavFile);
+
+    close(wavFile);
 
     auto c_end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> c_duration = c_end - c_start;
 
-    std::cout << "Peak Amplitude (Basic C Detection): " << (int)peakAmplitude_C << "\n";
-    std::cout << "C implementation time: " << c_duration.count() << " ms\n\n";
+    std::cout << "Peak Amplitude (Basic C Detection): " << peakAmplitude_C << "\n";
+    std::cout << "C peak implementation time: " << c_duration.count() << " ms\n";
+
+    auto c_start_normal = std::chrono::high_resolution_clock::now();
+
+    if (bitsPerSample == 8) {
+        normalize_cpp(samples_8bit, peakAmplitude_C, maxPossibleAmplitude);
+    } else {
+        normalize_cpp(samples_16bit, peakAmplitude_C, maxPossibleAmplitude);
+    }
+
+    auto c_end_normal = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> c_duration_normal = c_end_normal - c_start_normal;
+
+    std::cout << "C normalization implementation time: " << c_duration_normal.count() << " ms\n";
+    std::cout << "C total implementation time: " << c_duration_normal.count() + c_duration.count() << " ms\n\n";
 
     auto simd_start = std::chrono::high_resolution_clock::now();
     auto fn_peak = generatePeakPipeline(driver, bitsPerSample);
@@ -327,10 +358,7 @@ int main(int argc, char *argv[])
     auto simd_end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> simd_duration = simd_end - simd_start;
 
-    // Calculate maximum possible amplitude based on bits per sample
-    int32_t maxPossibleAmplitude = bitsPerSample == 8 ? (1 << bitsPerSample) : (1 << (bitsPerSample - 1)) - 1;
-
-    std::cout << "(SIMD) implementation time: " << simd_duration.count() << " ms\n";
+    std::cout << "(SIMD) peak implementation time: " << simd_duration.count() << " ms\n";
     std::cout << "(SIMD) Peak amplitude: " << peakAmplitude << "\n";
     std::cout << "Maximum possible amplitude: " << maxPossibleAmplitude << "\n";
 
@@ -340,12 +368,19 @@ int main(int argc, char *argv[])
     }
 
     // resetting the offset for the normalization process
-    lseek(fd, 44, SEEK_SET);
+    lseek(fd, 0, SEEK_SET);
+    readWAVHeader(fd, numChannels, sampleRate, bitsPerSample, numSamples);
 
+    auto simd_start_normal = std::chrono::high_resolution_clock::now();
     auto fn = generateNormalizationPipeline(driver, numChannels, bitsPerSample, normalizationFactor);
     StreamSetPtr wavStream;
 
     fn(wavStream, fd);
+    auto simd_end_normal = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> simd_duration_normal = simd_end_normal - simd_start_normal;
+
+    std::cout << "(SIMD) normalization implementation time: " << simd_duration_normal.count() << " ms\n";
+    std::cout << "(SIMD) total implementation time: " << simd_duration_normal.count() + simd_duration.count() << " ms\n";
 
     if (outputFile.getNumOccurrences() != 0) {
         const int fd_out = open(outputFile.c_str(), O_WRONLY | O_CREAT, 0666);
