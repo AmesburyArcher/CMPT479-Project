@@ -104,11 +104,11 @@ protected:
             }
         } else {
             // For 16-bit samples, each sample is two bytes.
-            for (unsigned i = 0; i < bitsPerSample; i++) {
+            for (unsigned i = 0; i < 16; i++) {
                 Value * wordpack = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i), blockOffsetPhi);
-                Value * samples = b.CreateBitCast(wordpack, b.fwVectorType(bitsPerSample));
+                Value * samples = b.CreateBitCast(wordpack, b.fwVectorType(16));
 
-                Value * zeroVec = b.simd_fill(bitsPerSample, b.getInt16(0)); //creating 16 lanes of 0s
+                Value * zeroVec = b.simd_fill(16, b.getInt16(0)); //creating 16 lanes of 0s
                 Value * isNegative = b.CreateICmpSLT(samples, zeroVec); //returns 1 if true
                 Value * absSamples = b.CreateSelect(isNegative, b.CreateNeg(samples), samples);
 

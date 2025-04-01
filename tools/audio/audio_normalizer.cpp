@@ -152,28 +152,20 @@ protected:
                 newMax = b.CreateUMax(samples, newMax);
             }
         } else {
-            // For 16-bit samples, process 4 pairs of byte packs
-            for (unsigned i = 0; i < 4; i++) {
-                Value * bytepack1 = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i*2), blockOffsetPhi);
-                Value * bytepack2 = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i*2+1), blockOffsetPhi);
 
-                // Value * combined = b.CreateOr(b.CreateShl(bytepack2, 8), bytepack1);
-                // Value * combined = b.CreateOr(b.CreateShl(bytepack2, b.getInt64(8)), bytepack1); // shifting by 8 btis now
-                Value * shiftAmount = b.simd_fill(64, b.getInt64(8));
+            // For 16-bit samples, each sample is two bytes.
+            for (unsigned i = 0; i < 16; i++) {
+                Value * wordpack = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i), blockOffsetPhi);
+                Value * samples = b.CreateBitCast(wordpack, b.fwVectorType(16));
 
-
-                Value * shifted = b.CreateShl(bytepack2, shiftAmount);
-                Value * combined = b.CreateOr(shifted, bytepack1);
-
-                Value * samples = b.CreateBitCast(combined, b.fwVectorType(16));
-
-                // Get absolute value for signed samples
                 Value * zeroVec = b.simd_fill(16, b.getInt16(0)); //creating 16 lanes of 0s
                 Value * isNegative = b.CreateICmpSLT(samples, zeroVec); //returns 1 if true
                 Value * absSamples = b.CreateSelect(isNegative, b.CreateNeg(samples), samples);
 
                 newMax = b.CreateUMax(absSamples, newMax);
+
             }
+
         }
         Value * nextBlk = b.CreateAdd(blockOffsetPhi, b.getSize(1));
         blockOffsetPhi->addIncoming(nextBlk, combineLoop);
@@ -193,7 +185,6 @@ protected:
             unsigned shiftAmount = 1 << i;
             Value * shifted = b.mvmd_srli(bitsPerSample, currentMax, shiftAmount);
             currentMax = b.simd_umax(bitsPerSample, shifted, currentMax);
-            // b.CallPrintRegister("max_step_" + std::to_string(i), currentMax);
         }
 
         // Extracting the max element
