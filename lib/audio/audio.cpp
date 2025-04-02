@@ -30,18 +30,6 @@
 
 #define NUM_HEADER_BYTES 44
 
-std::string generateRandomHex(int length) {
-    std::stringstream ss;
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<int> dist(0, 15);
-
-    for (int i = 0; i < length; ++i) {
-        ss << std::hex << dist(gen);
-    }
-    return ss.str();
-}
-
 namespace audio
 {
     void ParseAudioBuffer(
@@ -394,8 +382,8 @@ namespace audio
     }
 
     NormalizePabloKernel::NormalizePabloKernel(LLVMTypeSystemInterface & b, const unsigned int bitsPerSample, 
-                         StreamSet * const inputStreams, double amplificationFactor, int precision, StreamSet * const outputStreams)
-        : PabloKernel(b, "NormalizePabloKernel" + std::to_string(bitsPerSample) + "_" + generateRandomHex(8),
+                         StreamSet * const inputStreams, double amplificationFactor, int precision, std::string fileName, StreamSet * const outputStreams)
+        : PabloKernel(b, "NormalizePabloKernel" + std::to_string(bitsPerSample) + "_" + fileName,
                       {Binding{"inputStreams", inputStreams}},
                       {Binding{"outputStreams", outputStreams}}
 )

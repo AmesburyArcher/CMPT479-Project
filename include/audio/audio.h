@@ -117,6 +117,7 @@ namespace audio
                 StreamSet * const inputStreams,
                 double amplificationFactor,
                 int precision,
+                std::string fileName,
                 StreamSet * const outputStreams
             );
         protected:
@@ -127,6 +128,7 @@ namespace audio
             unsigned int numInputStreams;
             double amplificationFactor;
             int precision;
+        std::string fileName;
     };
 
     class ConcatenateKernel final : public PabloKernel {

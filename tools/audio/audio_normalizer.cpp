@@ -48,6 +48,7 @@ static cl::OptionCategory DemoOptions("Demo Options", "Demo control options.");
 static cl::opt<std::string> inputFile(cl::Positional, cl::desc("<input file>"), cl::Required, cl::cat(DemoOptions));
 static cl::opt<std::string> outputFile("o", cl::desc("Specify a file to save the modified .wav file."), cl::cat(DemoOptions));
 static cl::opt<std::string> scalingFactor("s", cl::desc("Specify a scaling factor of maximum volume"), cl::cat(DemoOptions));
+static cl::opt<std::string> kernelNameExtension("n", cl::desc("Specify a kernel name extension"), cl::cat(DemoOptions));
 
 double getScalingFactor() {
     const char *str = scalingFactor.c_str();
@@ -91,16 +92,15 @@ void normalize_cpp(std::vector<int16_t>& samples_16bit, uint32_t max_amplitude, 
     }
 }
 
-std::string generateRandomHex(int length) {
-    std::stringstream ss;
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<int> dist(0, 15);
+std::string extractBetweenSlashAndDot(const std::string& input) {
+    size_t lastSlash = input.find_last_of('/');
+    size_t lastDot = input.find_last_of('.');
 
-    for (int i = 0; i < length; ++i) {
-        ss << std::hex << dist(gen);
+    if (lastDot == std::string::npos || lastSlash == std::string::npos || lastSlash >= lastDot) {
+        return "random";
     }
-    return ss.str();
+
+    return input.substr(lastSlash + 1, lastDot - lastSlash - 1);
 }
 
 typedef void (*PipelineFunctionType)(StreamSetPtr & ss_buf, int32_t fd);
@@ -140,7 +140,7 @@ PipelineFunctionType generateNormalizationPipeline(CPUDriver & pxDriver, const u
 
         // Normalize the audio using normalization kernel
         StreamSet *NormalizedBasisBits = P.CreateStreamSet(bitsPerSample);
-        P.CreateKernelCall<NormalizePabloKernel>(bitsPerSample, BasisBits, normalizationFactor, precision, NormalizedBasisBits);
+        P.CreateKernelCall<NormalizePabloKernel>(bitsPerSample, BasisBits, normalizationFactor, precision, kernelNameExtension.empty() ? extractBetweenSlashAndDot(inputFile) : kernelNameExtension.c_str(), NormalizedBasisBits);
         SHOW_BIXNUM(NormalizedBasisBits);
 
         // Convert back to serial
@@ -168,7 +168,7 @@ public:
                          StreamSet * const inputStreams,
                          Scalar * peakAmplitude,
                          Scalar * initialAmplitude)
-    : MultiBlockKernel(b, "PeakDetectionKernel_" + std::to_string(bitsPerSample) + "_" + generateRandomHex(8) + "_" + generateRandomHex(16) + "_" + generateRandomHex(32),
+    : MultiBlockKernel(b, "PeakDetectionKernel_" + std::to_string(bitsPerSample) + "_" + (kernelNameExtension.empty() ? extractBetweenSlashAndDot(inputFile) : kernelNameExtension.c_str()),
                       {Binding{"inputStreams", inputStreams, FixedRate(1)}},
                       {},
                       {Binding{"initialAmplitude", initialAmplitude}},
@@ -274,7 +274,7 @@ PipelineFn generatePeakPipeline(CPUDriver & pxDriver, const unsigned int &bitsPe
 
     // Parse audio buffer (single channel)
     std::vector<StreamSet *> channels = {monoStream};
-    ParseAudioBuffer(P, fileDescriptor, 1, bitsPerSample, channels, false);
+    P.CreateKernelCall<ReadSourceKernel>(fileDescriptor, channels[0]);
 
 
     std::cout << "Before kernel call" << std::endl;
