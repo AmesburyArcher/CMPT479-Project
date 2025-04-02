@@ -24,7 +24,9 @@
 #include <util/aligned_allocator.h>
 #include <kernel/pipeline/program_builder.h>
 #include <cmath>
-
+#include <cstdlib>
+#include <cerrno>
+#include <random>
 
 
 using namespace kernel;
@@ -45,6 +47,21 @@ using namespace audio;
 static cl::OptionCategory DemoOptions("Demo Options", "Demo control options.");
 static cl::opt<std::string> inputFile(cl::Positional, cl::desc("<input file>"), cl::Required, cl::cat(DemoOptions));
 static cl::opt<std::string> outputFile("o", cl::desc("Specify a file to save the modified .wav file."), cl::cat(DemoOptions));
+static cl::opt<std::string> scalingFactor("s", cl::desc("Specify a scaling factor of maximum volume"), cl::cat(DemoOptions));
+
+double getScalingFactor() {
+    const char *str = scalingFactor.c_str();
+    char *endptr;
+    errno = 0;
+
+    double value = strtod(str, &endptr);
+
+    if (errno != 0 || *endptr != '\0' || str == endptr || value > 1.0 || value < 0.0) {
+        return 1.0;
+    }
+
+    return value;
+}
 
 int countFractionalDigits(double value) {
     std::string str = std::to_string(value);
@@ -72,6 +89,18 @@ void normalize_cpp(std::vector<int16_t>& samples_16bit, uint32_t max_amplitude, 
     for (int16_t& sample : samples_16bit) {
         sample = static_cast<int16_t>(std::round(sample * scale));
     }
+}
+
+std::string generateRandomHex(int length) {
+    std::stringstream ss;
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<int> dist(0, 15);
+
+    for (int i = 0; i < length; ++i) {
+        ss << std::hex << dist(gen);
+    }
+    return ss.str();
 }
 
 typedef void (*PipelineFunctionType)(StreamSetPtr & ss_buf, int32_t fd);
@@ -139,7 +168,7 @@ public:
                          StreamSet * const inputStreams,
                          Scalar * peakAmplitude,
                          Scalar * initialAmplitude)
-    : MultiBlockKernel(b, "PeakDetectionKernel_" + std::to_string(bitsPerSample),
+    : MultiBlockKernel(b, "PeakDetectionKernel_" + std::to_string(bitsPerSample) + "_" + generateRandomHex(8) + "_" + generateRandomHex(16) + "_" + generateRandomHex(32),
                       {Binding{"inputStreams", inputStreams, FixedRate(1)}},
                       {},
                       {Binding{"initialAmplitude", initialAmplitude}},
@@ -180,14 +209,13 @@ protected:
 
         Value * newMax = maxVectorPhi;
         if (bitsPerSample == 8) {
-            // For 8-bit samples, process all 8 byte packs
-            for (unsigned i = 0; i < bitsPerSample; i++) {
+            for (unsigned i = 0; i < b.getBitBlockWidth() / bitsPerSample; i++) {
                 Value * bytepack = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i), blockOffsetPhi);
                 Value * samples = b.CreateBitCast(bytepack, b.fwVectorType(bitsPerSample));
                 newMax = b.CreateUMax(samples, newMax);
             }
         } else {
-            for (unsigned i = 0; i < 16; i++) {
+            for (unsigned i = 0; i < b.getBitBlockWidth() / bitsPerSample; i++) {
                 Value * wordpack = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i), blockOffsetPhi);
                 Value * samples = b.CreateBitCast(wordpack, b.fwVectorType(16));
 
@@ -198,30 +226,6 @@ protected:
                 newMax = b.CreateUMax(absSamples, newMax);
 
             }
-
-            // Other version
-            // for (unsigned i = 0; i < 4; i++) {
-            //     Value * bytepack1 = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i*2), blockOffsetPhi);
-            //     Value * bytepack2 = b.loadInputStreamPack("inputStreams", sz_ZERO, b.getInt32(i*2+1), blockOffsetPhi);
-            //
-            //     // Value * combined = b.CreateOr(b.CreateShl(bytepack2, 8), bytepack1);
-            //     // Value * combined = b.CreateOr(b.CreateShl(bytepack2, b.getInt64(8)), bytepack1); // shifting by 8 btis now
-            //     Value * shiftAmount = b.simd_fill(64, b.getInt64(8));
-            //
-            //
-            //     Value * shifted = b.CreateShl(bytepack2, shiftAmount);
-            //     Value * combined = b.CreateOr(shifted, bytepack1);
-            //
-            //     Value * samples = b.CreateBitCast(combined, b.fwVectorType(16));
-            //
-            //     // Get absolute value for signed samples
-            //     Value * zeroVec = b.simd_fill(16, b.getInt16(0)); //creating 16 lanes of 0s
-            //     Value * isNegative = b.CreateICmpSLT(samples, zeroVec); //returns 1 if true
-            //     Value * absSamples = b.CreateSelect(isNegative, b.CreateNeg(samples), samples);
-            //
-            //     newMax = b.CreateUMax(absSamples, newMax);
-            // }
-
         }
         Value * nextBlk = b.CreateAdd(blockOffsetPhi, b.getSize(1));
         blockOffsetPhi->addIncoming(nextBlk, combineLoop);
@@ -235,17 +239,12 @@ protected:
         // Store the final value
         Value * currentMax = newMax;
         unsigned lanes = b.getBitBlockWidth() / bitsPerSample;
-        unsigned logSteps = static_cast<unsigned>(std::log2(lanes));
-
-        for (unsigned i = 0; i < logSteps; i++) {
-            unsigned shiftAmount = 1 << i;
-            Value * shifted = b.mvmd_srli(bitsPerSample, currentMax, shiftAmount);
+        for (unsigned i = lanes / 2; i >= 1; i /= 2) {
+            Value * shifted = b.mvmd_srli(bitsPerSample, currentMax, i);
             currentMax = b.simd_umax(bitsPerSample, shifted, currentMax);
         }
 
-        // Extracting the max element
         Value* maxToStoreRaw = b.CreateExtractElement(currentMax, b.getInt32(0));
-
         Value * maxToStore = b.CreateZExt(maxToStoreRaw, b.getInt32Ty());
 
         b.setScalarField("peakAmplitude", maxToStore);
@@ -376,7 +375,7 @@ int main(int argc, char *argv[])
 
     double normalizationFactor = 1.0;
     if (peakAmplitude > 0) {
-        normalizationFactor = static_cast<double>(maxPossibleAmplitude) / peakAmplitude;
+        normalizationFactor = (maxPossibleAmplitude * getScalingFactor()) / peakAmplitude;
     }
 
     // resetting the offset for the normalization process

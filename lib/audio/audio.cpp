@@ -1,5 +1,6 @@
 #include "audio/audio.h"
 #include <iostream>
+#include <random>
 #include <kernel/io/source_kernel.h>
 #include <kernel/core/kernel_builder.h>
 #include <llvm/IR/Value.h>
@@ -16,6 +17,7 @@
 #include <pablo/pe_zeroes.h>
 #include <kernel/pipeline/program_builder.h>
 
+
 #define SHOW_STREAM(name)           \
     if (codegen::EnableIllustrator) \
     P.captureBitstream(#name, name)
@@ -27,6 +29,18 @@
     P.captureByteData(#name, name)
 
 #define NUM_HEADER_BYTES 44
+
+std::string generateRandomHex(int length) {
+    std::stringstream ss;
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<int> dist(0, 15);
+
+    for (int i = 0; i < length; ++i) {
+        ss << std::hex << dist(gen);
+    }
+    return ss.str();
+}
 
 namespace audio
 {
@@ -231,85 +245,6 @@ namespace audio
         }
     }
 
-    // void readWAVHeader(const int &fd,
-    //                    unsigned int &numChannels,
-    //                    unsigned int &sampleRate,
-    //                    unsigned int &bitsPerSample,
-    //                    unsigned int &numSamples)
-    // {
-    //     char temp_buffer[11];
-    //
-    //     // validate file format
-    //     ssize_t bytesRead = read(fd, &temp_buffer, 8);
-    //     temp_buffer[4] = '\0';
-    //     if (bytesRead <= 0 || std::string(temp_buffer) != "RIFF")
-    //     {
-    //         throw std::runtime_error("Error parsing file format: Chunk ID does not match Wav format.");
-    //     }
-    //
-    //     bytesRead = read(fd, &temp_buffer, 4);
-    //     temp_buffer[4] = '\0';
-    //     if (bytesRead <= 0 || std::string(temp_buffer) != "WAVE")
-    //     {
-    //         throw std::runtime_error("Error parsing file format: Header does not match Wav format.");
-    //     }
-    //
-    //     bytesRead = read(fd, &temp_buffer, 10);
-    //     temp_buffer[4] = '\0';
-    //     if (bytesRead <= 0 || std::string(temp_buffer) != "fmt\x20")
-    //     {
-    //         throw std::runtime_error("Error parsing file format: Subchunk ID does not match Wav format.");
-    //     }
-    //
-    //     // read 2 bytes for num channels
-    //     uint16_t num_channels;
-    //     bytesRead = read(fd, reinterpret_cast<char *>(&num_channels), 2);
-    //     if (bytesRead <= 0)
-    //     {
-    //         throw std::runtime_error("Error parsing file format: Cannot interpret number channels.");
-    //     }
-    //     numChannels = num_channels;
-    //
-    //     // read 4 bytes for sample rate
-    //     bytesRead = read(fd, reinterpret_cast<char *>(&sampleRate), 4);
-    //     if (bytesRead <= 0)
-    //     {
-    //         throw std::runtime_error("Error parsing file format: Cannot interpret sample rate.");
-    //     }
-    //
-    //     // skip the next 6 bytes
-    //     bytesRead = read(fd, temp_buffer, 6);
-    //     if (bytesRead <= 0)
-    //     {
-    //         throw std::runtime_error("Error parsing file format.");
-    //     }
-    //
-    //     // read 4 bytes for num bits per sample
-    //     uint16_t bits_per_sample;
-    //     bytesRead = read(fd, reinterpret_cast<char *>(&bits_per_sample), 2);
-    //     if (bytesRead <= 0)
-    //     {
-    //         throw std::runtime_error("Error parsing file format.");
-    //     }
-    //     bitsPerSample = bits_per_sample;
-    //
-    //     bytesRead = read(fd, temp_buffer, 4);
-    //     temp_buffer[4] = '\0';
-    //     if (bytesRead <= 0 || std::string(temp_buffer) != "data")
-    //     {
-    //         throw std::runtime_error("Error parsing file format: Subchunk 2 ID does not match Wav format.");
-    //     }
-    //
-    //     unsigned subchunk2_size;
-    //     bytesRead = read(fd, reinterpret_cast<char *>(&subchunk2_size), 4);
-    //     if (bytesRead <= 0)
-    //     {
-    //         throw std::runtime_error("Error parsing file format: Cannot interpret subchunk 2 size.");
-    //     }
-    //
-    //     numSamples = subchunk2_size / (numChannels * bitsPerSample / 8);
-    // }
-
     void S2P(
         ProgramBuilder &P,
         unsigned int bitsPerSample,
@@ -460,7 +395,7 @@ namespace audio
 
     NormalizePabloKernel::NormalizePabloKernel(LLVMTypeSystemInterface & b, const unsigned int bitsPerSample, 
                          StreamSet * const inputStreams, double amplificationFactor, int precision, StreamSet * const outputStreams)
-        : PabloKernel(b, "NormalizePabloKernel" + std::to_string(bitsPerSample),
+        : PabloKernel(b, "NormalizePabloKernel" + std::to_string(bitsPerSample) + "_" + generateRandomHex(8),
                       {Binding{"inputStreams", inputStreams}},
                       {Binding{"outputStreams", outputStreams}}
 )
