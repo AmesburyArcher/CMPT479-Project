@@ -64,16 +64,6 @@ double getScalingFactor() {
     return value;
 }
 
-int countFractionalDigits(double value) {
-    std::string str = std::to_string(value);
-    size_t pos = str.find('.');
-    if (pos == std::string::npos) return 0;
-
-    str.erase(str.find_last_not_of('0') + 1, std::string::npos);
-
-    return str.length() - pos - 1;
-}
-
 void normalize_cpp(std::vector<uint8_t>& samples_8bit, uint32_t max_amplitude, uint32_t target_peak) {
     if (max_amplitude == 0) return;
 
@@ -127,10 +117,6 @@ PipelineFunctionType generateNormalizationPipeline(CPUDriver & pxDriver, const u
 
     std::cout << "Normalization factor: " << normalizationFactor << std::endl;
 
-    int precision = countFractionalDigits(normalizationFactor);
-
-    std::cout << "Precision: " << precision << std::endl;
-
     // Process each channel
     for (unsigned i = 0; i < numChannels; ++i) {
         // Convert serial to parallel
@@ -140,7 +126,7 @@ PipelineFunctionType generateNormalizationPipeline(CPUDriver & pxDriver, const u
 
         // Normalize the audio using normalization kernel
         StreamSet *NormalizedBasisBits = P.CreateStreamSet(bitsPerSample);
-        P.CreateKernelCall<NormalizePabloKernel>(bitsPerSample, BasisBits, normalizationFactor, precision, kernelNameExtension.empty() ? extractBetweenSlashAndDot(inputFile) : kernelNameExtension.c_str(), NormalizedBasisBits);
+        P.CreateKernelCall<NormalizePabloKernel>(bitsPerSample, BasisBits, normalizationFactor, kernelNameExtension.empty() ? extractBetweenSlashAndDot(inputFile) : kernelNameExtension.c_str(), NormalizedBasisBits);
         SHOW_BIXNUM(NormalizedBasisBits);
 
         // Convert back to serial

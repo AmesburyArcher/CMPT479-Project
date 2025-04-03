@@ -116,7 +116,6 @@ namespace audio
                 const unsigned int bitsPerSample,
                 StreamSet * const inputStreams,
                 double amplificationFactor,
-                int precision,
                 std::string fileName,
                 StreamSet * const outputStreams
             );
@@ -127,7 +126,6 @@ namespace audio
             unsigned int bitsPerSample;
             unsigned int numInputStreams;
             double amplificationFactor;
-            int precision;
         std::string fileName;
     };
 

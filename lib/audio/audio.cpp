@@ -30,6 +30,19 @@
 
 #define NUM_HEADER_BYTES 44
 
+int countSignificantDecimalDigits(double value) {
+    std::stringstream ss;
+    ss << std::fixed << std::setprecision(15) << value;
+    std::string s = ss.str();
+
+    size_t decimal_pos = s.find('.');
+    if (decimal_pos == std::string::npos) return 0;
+
+    s = s.substr(decimal_pos + 1);
+    s = s.substr(0, s.find_last_not_of('0') + 1);
+    return static_cast<int>(s.length());
+}
+
 namespace audio
 {
     void ParseAudioBuffer(
@@ -382,15 +395,14 @@ namespace audio
     }
 
     NormalizePabloKernel::NormalizePabloKernel(LLVMTypeSystemInterface & b, const unsigned int bitsPerSample, 
-                         StreamSet * const inputStreams, double amplificationFactor, int precision, std::string fileName, StreamSet * const outputStreams)
+                         StreamSet * const inputStreams, double amplificationFactor, std::string fileName, StreamSet * const outputStreams)
         : PabloKernel(b, "NormalizePabloKernel" + std::to_string(bitsPerSample) + "_" + fileName,
                       {Binding{"inputStreams", inputStreams}},
                       {Binding{"outputStreams", outputStreams}}
 )
         , bitsPerSample(bitsPerSample)
         , numInputStreams(inputStreams->getNumElements()),
-            amplificationFactor(amplificationFactor),
-        precision(precision)
+            amplificationFactor(amplificationFactor)
     {
         if (inputStreams->getNumElements() != outputStreams->getNumElements()) {
             throw std::invalid_argument(
@@ -400,42 +412,55 @@ namespace audio
     }
 
     void NormalizePabloKernel::generatePabloMethod() {
-        int FIXED_POINT_SHIFT = precision;
-        int scaledFactor = static_cast<int>(amplificationFactor * (1 << FIXED_POINT_SHIFT));
+        constexpr int MIN_AUDIO_PRECISION = 8;
+        constexpr int MAX_PRECISION = 16;
+
+        // Calculate precision based on significant digits
+        int decimalDigits = countSignificantDecimalDigits(amplificationFactor);
+        int precision = std::clamp(decimalDigits * 4, MIN_AUDIO_PRECISION, MAX_PRECISION);
+
+        // Use 64-bit math for the scaling factor to avoid overflow
+        auto scaledFactor = static_cast<int64_t>(std::round(amplificationFactor * (1ll << precision)));
 
         pablo::PabloBuilder pb(getEntryScope());
         BixNumCompiler bnc(pb);
         std::vector<PabloAST *> inputStreams = getInputStreamSet("inputStreams");
-        const unsigned bitsPerSample = inputStreams.size();
 
-        std::vector<PabloAST *> ExtendedStreams = bnc.SignExtend(inputStreams, bitsPerSample + FIXED_POINT_SHIFT + 1);
+        // Extend with enough bits for multiplication and overflow detection
+        unsigned extendedWidth = bitsPerSample + precision + 2;  // +2 for sign and overflow headroom
+        std::vector<PabloAST *> ExtendedStreams = bnc.SignExtend(inputStreams, extendedWidth);
+
         std::vector<PabloAST *> AmplifiedStreams = bnc.MulModular(ExtendedStreams, scaledFactor);
 
+        // Extract the properly shifted result
         std::vector<PabloAST *> ShiftedStreams(bitsPerSample);
         for (unsigned i = 0; i < bitsPerSample; ++i) {
-            ShiftedStreams[i] = AmplifiedStreams[i + FIXED_POINT_SHIFT]; // Right shift by selecting bits
+            ShiftedStreams[i] = AmplifiedStreams[i + precision];
         }
 
-        std::vector<PabloAST *> flipStreams(ShiftedStreams.size());
-        for (unsigned i = 0; i < ShiftedStreams.size(); ++i) {
-            flipStreams[i] = pb.createNot(ShiftedStreams[i]);
-        }
-        std::vector<PabloAST *> NegativeStreams = bnc.AddModular(flipStreams, 1);
-        std::vector<PabloAST *> UnsignedStreams = bnc.Select(inputStreams[bitsPerSample - 1], NegativeStreams, ShiftedStreams);
-
+        // Handle overflow conditions
         PabloAST *overflow = pb.createZeroes();
-        for (int i = (int)bitsPerSample - 1; i < (int)UnsignedStreams.size() - 1; ++i) {
-            overflow = pb.createOr(overflow, UnsignedStreams[i]);
+        for (unsigned i = bitsPerSample + precision; i < extendedWidth; ++i) {
+            overflow = pb.createOr(overflow, AmplifiedStreams[i]);
         }
 
-        PabloAST *is_negative_overflow = pb.createAnd(inputStreams[bitsPerSample - 1], overflow);
-        PabloAST *is_positive_overflow = pb.createAnd(pb.createNot(inputStreams[bitsPerSample - 1]), overflow);
+        PabloAST *isNegative = inputStreams[bitsPerSample - 1];
+        PabloAST *is_negative_overflow = pb.createAnd(isNegative, overflow);
+        PabloAST *is_positive_overflow = pb.createAnd(pb.createNot(isNegative), overflow);
 
-        for (int i = 0; i < (int)bitsPerSample - 1; ++i) {
-            ShiftedStreams[i] = pb.createSel(is_negative_overflow, pb.createZeroes(), ShiftedStreams[i]);
-            ShiftedStreams[i] = pb.createSel(is_positive_overflow, pb.createOnes(), ShiftedStreams[i]);
+        // Clamp overflowed values using standard Pablo operations
+        for (unsigned i = 0; i < bitsPerSample - 1; ++i) {
+            PabloAST *clampedPositive = pb.createAnd(is_positive_overflow, pb.createOnes());
+            PabloAST *clampedNegative = pb.createAnd(is_negative_overflow, pb.createZeroes());
+            PabloAST *normalValue = pb.createAnd(
+                pb.createNot(pb.createOr(is_positive_overflow, is_negative_overflow)),
+                ShiftedStreams[i]);
+
+            ShiftedStreams[i] = pb.createOr3(clampedPositive, clampedNegative, normalValue);
         }
-        ShiftedStreams[bitsPerSample - 1] = inputStreams[bitsPerSample - 1];
+
+        // Preserve original sign bit
+        ShiftedStreams[bitsPerSample - 1] = isNegative;
 
         writeOutputStreamSet("outputStreams", ShiftedStreams);
     }
