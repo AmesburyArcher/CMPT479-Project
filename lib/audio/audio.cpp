@@ -448,7 +448,7 @@ namespace audio
         PabloAST *is_negative_overflow = pb.createAnd(isNegative, overflow);
         PabloAST *is_positive_overflow = pb.createAnd(pb.createNot(isNegative), overflow);
 
-        // Clamp overflowed values using standard Pablo operations
+        // Clamp overflowed values
         for (unsigned i = 0; i < bitsPerSample - 1; ++i) {
             PabloAST *clampedPositive = pb.createAnd(is_positive_overflow, pb.createOnes());
             PabloAST *clampedNegative = pb.createAnd(is_negative_overflow, pb.createZeroes());
