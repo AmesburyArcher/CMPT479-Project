@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# Test script used to measure timing performances from various length files
+
 # --- Config ---
 OUT_DIR="test_audio"
 LOG_FILE="${OUT_DIR}/audio_tests.log"  # Log file path

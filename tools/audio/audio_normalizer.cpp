@@ -115,8 +115,6 @@ PipelineFunctionType generateNormalizationPipeline(CPUDriver & pxDriver, const u
 
     std::vector<StreamSet *> NormalizedSampleStreams(numChannels);
 
-    std::cout << "Normalization factor: " << normalizationFactor << std::endl;
-
     // Process each channel
     for (unsigned i = 0; i < numChannels; ++i) {
         // Convert serial to parallel
@@ -242,10 +240,10 @@ private:
 };
 
 
+
 typedef int32_t (*PipelineFn)(int32_t fd, int32_t initialAmplitude);
 
 PipelineFn generatePeakPipeline(CPUDriver & pxDriver, const unsigned int &bitsPerSample) {
-    std::cout << "Generating pipeline..." << std::endl;
     auto P = CreatePipeline(pxDriver,
         Input<int32_t>("inputFileDescriptor"),
         Input<int32_t>("initialAmplitude"),
@@ -262,43 +260,20 @@ PipelineFn generatePeakPipeline(CPUDriver & pxDriver, const unsigned int &bitsPe
     std::vector<StreamSet *> channels = {monoStream};
     P.CreateKernelCall<ReadSourceKernel>(fileDescriptor, channels[0]);
 
-
-    std::cout << "Before kernel call" << std::endl;
     // Detect peak amplitude directly into the output scalar
     P.CreateKernelCall<PeakDetectionKernel>(bitsPerSample, monoStream, peakAmplitude, initialAmplitude);
 
     return P.compile();
 }
 
-
-int main(int argc, char *argv[])
+void scalar_cpp_benchmark(int32_t maxPossibleAmplitude, unsigned int bitsPerSample)
 {
-    codegen::ParseCommandLineOptions(argc, argv, {&DemoOptions, codegen::codegen_flags()});
-
-    CPUDriver driver("demo");
-    const int fd = open(inputFile.c_str(), O_RDONLY);
-    unsigned int sampleRate = 0, numChannels = 2, bitsPerSample = 8, numSamples = 0;
-    try {
-        readWAVHeader(fd, numChannels, sampleRate, bitsPerSample, numSamples);
-        std::cout << "WAV File Info: " << numChannels << " channels, "
-                 << sampleRate << " Hz, "
-                 << bitsPerSample << " bits per sample, "
-                 << numSamples << " samples\n";
-    } catch (const std::exception &e) {
-        llvm::errs() << "Error: " << inputFile << " is not a valid WAV file.\n";
-        close(fd);
-        return 1;
-    }
-
-    // Calculate maximum possible amplitude based on bits per sample
-    int32_t maxPossibleAmplitude = bitsPerSample == 8 ? (1 << bitsPerSample) : (1 << (bitsPerSample - 1)) - 1;
-
     /*** === ADDITION: Basic C-based Peak Detection === ***/
     auto c_start = std::chrono::high_resolution_clock::now();
     int wavFile = open(inputFile.c_str(), O_RDWR);
     if (!wavFile) {
         std::cerr << "Error: Unable to open WAV file for peak detection.\n";
-        return 1;
+        return;
     }
 
     unsigned int sampleRate_c = 0, numChannels_c = 2, bitsPerSample_c = 8, numSamples_c = 0;
@@ -330,7 +305,6 @@ int main(int argc, char *argv[])
     auto c_end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> c_duration = c_end - c_start;
 
-    std::cout << "Peak Amplitude (Basic C Detection): " << peakAmplitude_C << "\n";
     std::cout << "C peak implementation time: " << c_duration.count() << " ms\n";
 
     auto c_start_normal = std::chrono::high_resolution_clock::now();
@@ -346,6 +320,41 @@ int main(int argc, char *argv[])
 
     std::cout << "C normalization implementation time: " << c_duration_normal.count() << " ms\n";
     std::cout << "C total implementation time: " << c_duration_normal.count() + c_duration.count() << " ms\n\n";
+}
+
+
+int main(int argc, char *argv[])
+{
+    codegen::ParseCommandLineOptions(argc, argv, {&DemoOptions, codegen::codegen_flags()});
+
+    CPUDriver driver("demo");
+    const int fd = open(inputFile.c_str(), O_RDONLY);
+    unsigned int sampleRate = 0, numChannels = 2, bitsPerSample = 8, numSamples = 0;
+    try {
+        readWAVHeader(fd, numChannels, sampleRate, bitsPerSample, numSamples);
+        std::cout << "WAV File Info: " << numChannels << " channels, "
+                 << sampleRate << " Hz, "
+                 << bitsPerSample << " bits per sample, "
+                 << numSamples << " samples\n";
+    } catch (const std::exception &e) {
+        llvm::errs() << "Error: " << inputFile << " is not a valid WAV file.\n";
+        close(fd);
+        return 1;
+    }
+
+    if (bitsPerSample != 8 && bitsPerSample != 16)
+    {
+        llvm::errs() << "Error: Only 8 and 16 bit audio is supported";
+        close(fd);
+        return 1;
+    }
+
+    // Calculate maximum possible amplitude based on bits per sample
+    int32_t maxPossibleAmplitude = bitsPerSample == 8 ? (1 << bitsPerSample) : (1 << (bitsPerSample - 1)) - 1;
+
+
+    // This function performs scalar c++ version to be used as a timing benchmark
+    // scalar_cpp_benchmark(maxPossibleAmplitude, bitsPerSample);
 
     auto simd_start = std::chrono::high_resolution_clock::now();
     auto fn_peak = generatePeakPipeline(driver, bitsPerSample);
@@ -356,8 +365,6 @@ int main(int argc, char *argv[])
     std::chrono::duration<double, std::milli> simd_duration = simd_end - simd_start;
 
     std::cout << "(SIMD) peak implementation time: " << simd_duration.count() << " ms\n";
-    std::cout << "(SIMD) Peak amplitude: " << peakAmplitude << "\n";
-    std::cout << "Maximum possible amplitude: " << maxPossibleAmplitude << "\n";
 
     double normalizationFactor = 1.0;
     if (peakAmplitude > 0) {
