@@ -55,16 +55,4 @@ parabix_add_executable(
             audio
 )
 
-parabix_add_executable(
-        NAME
-            peak_detection
-        SRC
-            peak_detection.cpp
-        DEPS
-            kernel.io
-            kernel.pipeline
-            kernel.util
-            toolchain
-            audio
-)
 
